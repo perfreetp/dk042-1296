@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Menu, Avatar, Dropdown, Badge, Select } from 'antd'
 import {
   EnvironmentOutlined,
@@ -19,9 +19,16 @@ import { mockStations } from './mock'
 
 type PageKey = 'map' | 'trend' | 'workorder' | 'benchmark' | 'review'
 
+interface TrendDrillParams {
+  area?: string
+  stationId?: string
+  activeTab?: string
+}
+
 function App() {
   const [currentPage, setCurrentPage] = useState<PageKey>('map')
   const [selectedArea, setSelectedArea] = useState<string>('all')
+  const [trendDrillParams, setTrendDrillParams] = useState<TrendDrillParams | null>(null)
 
   const menuItems = [
     { key: 'map', icon: <EnvironmentOutlined />, label: '站点地图' },
@@ -33,20 +40,53 @@ function App() {
 
   const areas = ['all', ...new Set(mockStations.map(s => s.area))]
 
+  const handleNavigateToTrend = (params: TrendDrillParams) => {
+    if (params.area) {
+      setSelectedArea(params.area)
+    }
+    setTrendDrillParams(params)
+    setCurrentPage('trend')
+  }
+
+  const handleAreaChange = (area: string) => {
+    setSelectedArea(area)
+  }
+
+  const handleClearTrendDrill = () => {
+    setTrendDrillParams(null)
+  }
+
   const renderPage = () => {
     switch (currentPage) {
       case 'map':
-        return <StationMap selectedArea={selectedArea} />
+        return (
+          <StationMap
+            selectedArea={selectedArea}
+            onNavigateToTrend={handleNavigateToTrend}
+          />
+        )
       case 'trend':
-        return <TrendAnalysis selectedArea={selectedArea} />
+        return (
+          <TrendAnalysis
+            selectedArea={selectedArea}
+            onAreaChange={handleAreaChange}
+            drillParams={trendDrillParams}
+            onClearDrill={handleClearTrendDrill}
+          />
+        )
       case 'workorder':
         return <WorkOrderTrack selectedArea={selectedArea} />
       case 'benchmark':
-        return <BenchmarkRanking selectedArea={selectedArea} />
+        return (
+          <BenchmarkRanking
+            selectedArea={selectedArea}
+            onAreaChange={handleAreaChange}
+          />
+        )
       case 'review':
         return <ReviewReport selectedArea={selectedArea} />
       default:
-        return <StationMap selectedArea={selectedArea} />
+        return <StationMap selectedArea={selectedArea} onNavigateToTrend={handleNavigateToTrend} />
     }
   }
 

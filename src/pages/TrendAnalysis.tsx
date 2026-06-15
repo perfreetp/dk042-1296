@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
-import { Row, Col, Card, Select, DatePicker, Tabs, Tag, List, Progress, Modal, Descriptions, Button } from 'antd'
+import { Row, Col, Card, Select, DatePicker, Tabs, Tag, List, Progress, Modal, Descriptions, Button, Alert } from 'antd'
 import {
   LineChartOutlined,
   ThunderboltOutlined,
@@ -11,6 +11,7 @@ import {
   ToolOutlined,
   AlertOutlined,
   CheckCircleOutlined,
+  CloseOutlined,
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
@@ -19,8 +20,17 @@ import type { Gun } from '../types'
 
 const { RangePicker } = DatePicker
 
+interface TrendDrillParams {
+  area?: string
+  stationId?: string
+  activeTab?: string
+}
+
 interface Props {
   selectedArea: string
+  onAreaChange?: (area: string) => void
+  drillParams?: TrendDrillParams | null
+  onClearDrill?: () => void
 }
 
 interface AbnormalGun {
@@ -32,11 +42,13 @@ interface AbnormalGun {
   suggestion: string
 }
 
-function TrendAnalysis({ selectedArea }: Props) {
+function TrendAnalysis({ selectedArea, onAreaChange, drillParams, onClearDrill }: Props) {
   const [selectedStationId, setSelectedStationId] = useState<string>('all')
   const [selectedGunModel, setSelectedGunModel] = useState<string>('all')
   const [abnormalDetailVisible, setAbnormalDetailVisible] = useState(false)
   const [selectedAbnormalGun, setSelectedAbnormalGun] = useState<AbnormalGun | null>(null)
+  const [activeTab, setActiveTab] = useState<string>('1')
+  const [drillApplied, setDrillApplied] = useState<TrendDrillParams | null>(null)
 
   useEffect(() => {
     if (selectedArea === 'all') return
@@ -45,6 +57,21 @@ function TrendAnalysis({ selectedArea }: Props) {
       setSelectedStationId('all')
     }
   }, [selectedArea, selectedStationId])
+
+  useEffect(() => {
+    if (!drillParams) return
+    if (drillParams.area && drillParams.area !== selectedArea) {
+      if (onAreaChange) onAreaChange(drillParams.area)
+    }
+    if (drillParams.stationId) {
+      setSelectedStationId(drillParams.stationId)
+    }
+    if (drillParams.activeTab) {
+      const tabKey = drillParams.activeTab === 'abnormal' ? '4' : drillParams.activeTab === 'trend' ? '1' : drillParams.activeTab
+      setActiveTab(tabKey)
+    }
+    setDrillApplied(drillParams)
+  }, [drillParams])
 
   const filteredStations = useMemo(() => {
     if (selectedArea === 'all') return mockStations
@@ -74,13 +101,18 @@ function TrendAnalysis({ selectedArea }: Props) {
 
   const now = useMemo(() => new Date(), [])
 
+  const filteredGunIds = useMemo(() => {
+    return new Set(filteredGuns.map(g => g.id))
+  }, [filteredGuns])
+
   const filteredRecords = useMemo(() => {
     return mockTempRecords.filter(r => {
       if (selectedStationId !== 'all' && r.stationId !== selectedStationId) return false
       if (selectedArea !== 'all' && selectedStationId === 'all' && !filteredStationIds.has(r.stationId)) return false
+      if (selectedGunModel !== 'all' && !filteredGunIds.has(r.gunId)) return false
       return true
     })
-  }, [selectedStationId, selectedArea, filteredStationIds])
+  }, [selectedStationId, selectedArea, filteredStationIds, selectedGunModel, filteredGunIds])
 
   const abnormalGuns = useMemo<AbnormalGun[]>(() => {
     const gunMap = new Map<string, { gun: Gun; records: typeof mockTempRecords }>()
@@ -475,8 +507,54 @@ function TrendAnalysis({ selectedArea }: Props) {
     }
   }
 
+  const drillSourceText = useMemo(() => {
+    if (!drillApplied) return null
+    const station = drillApplied.stationId
+      ? mockStations.find(s => s.id === drillApplied.stationId)?.name
+      : null
+    const area = drillApplied.area
+    const parts: string[] = []
+    if (area && area !== 'all') parts.push(area)
+    if (station) parts.push(station)
+    const tab = drillApplied.activeTab === 'abnormal' ? '异常升温视图' : drillApplied.activeTab === 'trend' ? '温升趋势视图' : ''
+    return `${parts.join(' - ')}${tab ? '，' + tab : ''}`
+  }, [drillApplied])
+
   return (
     <div>
+      {drillApplied && drillSourceText && (
+        <Alert
+          type="info"
+          showIcon
+          closable
+          onClose={() => {
+            setDrillApplied(null)
+            if (onClearDrill) onClearDrill()
+          }}
+          style={{ marginBottom: 16 }}
+          message={
+            <span>
+              已从站点地图钻取：<strong style={{ color: '#1677ff' }}>{drillSourceText}</strong>
+              <Button
+                type="link"
+                size="small"
+                icon={<CloseOutlined />}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setDrillApplied(null)
+                  if (onClearDrill) onClearDrill()
+                  setSelectedStationId('all')
+                  setSelectedGunModel('all')
+                  if (onAreaChange) onAreaChange('all')
+                }}
+                style={{ marginLeft: 12 }}
+              >
+                清除钻取条件
+              </Button>
+            </span>
+          }
+        />
+      )}
       <Card style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ color: '#666' }}>选择站点：</span>
@@ -503,6 +581,9 @@ function TrendAnalysis({ selectedArea }: Props) {
             style={{ marginLeft: 16 }}
             defaultValue={[dayjs().subtract(30, 'day'), dayjs()]}
           />
+        </div>
+        <div style={{ marginTop: 12, fontSize: 12, color: '#999' }}>
+          当前筛选口径：区域（{selectedArea === 'all' ? '全区域' : selectedArea}） · 站点（{selectedStationId === 'all' ? '全部' : mockStations.find(s => s.id === selectedStationId)?.name || '全部'}） · 型号（{selectedGunModel === 'all' ? '全部' : selectedGunModel}） · 枪位（{filteredGuns.length}个） · 记录（{filteredRecords.length}条）
         </div>
       </Card>
 
@@ -553,7 +634,7 @@ function TrendAnalysis({ selectedArea }: Props) {
         </Col>
       </Row>
 
-      <Tabs defaultActiveKey="1">
+      <Tabs activeKey={activeTab} onChange={setActiveTab}>
         <Tabs.TabPane tab="温升趋势" key="1">
           <Row gutter={16}>
             <Col span={16}>

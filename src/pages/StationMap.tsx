@@ -1,21 +1,30 @@
 import { useState, useMemo } from 'react'
-import { Row, Col, Card, Statistic, Table, Tag, Tooltip, Modal, List, Progress } from 'antd'
+import { Row, Col, Card, Statistic, Table, Tag, Tooltip, Modal, List, Progress, Button, Space } from 'antd'
 import {
   EnvironmentOutlined,
   WarningOutlined,
   FireOutlined,
   CheckCircleOutlined,
   InfoCircleOutlined,
+  LineChartOutlined,
+  ArrowRightOutlined,
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import { mockStations, mockGuns } from '../mock'
 import type { Station, Gun } from '../types'
 
-interface Props {
-  selectedArea: string
+interface TrendDrillParams {
+  area?: string
+  stationId?: string
+  activeTab?: string
 }
 
-function StationMap({ selectedArea }: Props) {
+interface Props {
+  selectedArea: string
+  onNavigateToTrend?: (params: TrendDrillParams) => void
+}
+
+function StationMap({ selectedArea, onNavigateToTrend }: Props) {
   const [selectedStation, setSelectedStation] = useState<Station | null>(null)
   const [modalVisible, setModalVisible] = useState(false)
 
@@ -118,16 +127,17 @@ function StationMap({ selectedArea }: Props) {
   }, [filteredStations])
 
   const areaDistribution = useMemo(() => {
-    const areaMap = new Map<string, { total: number; high: number; warning: number }>()
+    const areaMap = new Map<string, { total: number; high: number; warning: number; stationCount: number }>()
     filteredStations.forEach(station => {
       const area = station.area
       if (!areaMap.has(area)) {
-        areaMap.set(area, { total: 0, high: 0, warning: 0 })
+        areaMap.set(area, { total: 0, high: 0, warning: 0, stationCount: 0 })
       }
       const data = areaMap.get(area)!
       data.total += station.totalGuns
       data.high += station.highTempGuns
       data.warning += station.warningGuns
+      data.stationCount += 1
     })
     return Array.from(areaMap.entries()).map(([name, data]) => ({
       name,
@@ -184,6 +194,18 @@ function StationMap({ selectedArea }: Props) {
     ],
   }), [areaDistribution])
 
+  const handleBarChartClick = (params: any) => {
+    if (onNavigateToTrend && params.name) {
+      const areaData = areaDistribution.find(d => d.name === params.name)
+      if (areaData) {
+        onNavigateToTrend({
+          area: params.name,
+          activeTab: 'abnormal',
+        })
+      }
+    }
+  }
+
   const stationColumns = [
     {
       title: '站点名称',
@@ -224,6 +246,30 @@ function StationMap({ selectedArea }: Props) {
       },
     },
     { title: '负责人', dataIndex: 'manager', key: 'manager' },
+    {
+      title: '趋势钻取',
+      key: 'drill',
+      width: 120,
+      render: (_: any, record: Station) => (
+        <Button
+          type="link"
+          size="small"
+          icon={<LineChartOutlined />}
+          onClick={(e) => {
+            e.stopPropagation()
+            if (onNavigateToTrend) {
+              onNavigateToTrend({
+                area: record.area,
+                stationId: record.id,
+                activeTab: 'abnormal',
+              })
+            }
+          }}
+        >
+          查看趋势
+        </Button>
+      ),
+    },
   ]
 
   const stationGuns = useMemo(() => {
@@ -305,7 +351,26 @@ function StationMap({ selectedArea }: Props) {
             }
             style={{ height: 500 }}
           >
-            <ReactECharts option={mapOption} style={{ height: 420 }} />
+            <ReactECharts
+              option={mapOption}
+              style={{ height: 420 }}
+              onEvents={{
+                click: (params: any) => {
+                  if (onNavigateToTrend && params.data && params.data.station) {
+                    const s = params.data.station
+                    onNavigateToTrend({
+                      area: s.area,
+                      stationId: s.id,
+                      activeTab: 'abnormal',
+                    })
+                  }
+                },
+              }}
+            />
+            <div style={{ textAlign: 'center', marginTop: 4, fontSize: 12, color: '#999' }}>
+              <InfoCircleOutlined style={{ marginRight: 4 }} />
+              点击地图上的站点可直接跳转到趋势分析查看高温枪位和异常升温
+            </div>
           </Card>
         </Col>
 
@@ -317,9 +382,31 @@ function StationMap({ selectedArea }: Props) {
                 各区域高温枪位分布
               </div>
             }
+            extra={
+              onNavigateToTrend ? (
+                <Tooltip title="查看全区域异常升温趋势">
+                  <Button
+                    type="link"
+                    size="small"
+                    icon={<LineChartOutlined />}
+                    onClick={() => onNavigateToTrend({ area: 'all', activeTab: 'abnormal' })}
+                  >
+                    全局趋势
+                  </Button>
+                </Tooltip>
+              ) : null
+            }
             style={{ height: 500, marginBottom: 16 }}
           >
-            <ReactECharts option={barChartOption} style={{ height: 400 }} />
+            <ReactECharts
+              option={barChartOption}
+              style={{ height: 400 }}
+              onEvents={{ click: handleBarChartClick }}
+            />
+            <div style={{ textAlign: 'center', marginTop: 4, fontSize: 12, color: '#999' }}>
+              <InfoCircleOutlined style={{ marginRight: 4 }} />
+              点击柱状图区域可直接跳转到该区域的异常升温视图
+            </div>
           </Card>
         </Col>
       </Row>
@@ -342,7 +429,30 @@ function StationMap({ selectedArea }: Props) {
       </Card>
 
       <Modal
-        title={`${selectedStation?.name} - 枪位详情`}
+        title={
+          selectedStation ? (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>{selectedStation.name} - 枪位详情</span>
+              {onNavigateToTrend && (
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<LineChartOutlined />}
+                  onClick={() => {
+                    onNavigateToTrend({
+                      area: selectedStation.area,
+                      stationId: selectedStation.id,
+                      activeTab: 'trend',
+                    })
+                    setModalVisible(false)
+                  }}
+                >
+                  趋势分析 <ArrowRightOutlined />
+                </Button>
+              )}
+            </div>
+          ) : '站点详情'
+        }
         open={modalVisible}
         onCancel={() => setModalVisible(false)}
         footer={null}
@@ -370,6 +480,8 @@ function StationMap({ selectedArea }: Props) {
                 </div>
               </Col>
             </Row>
+
+            <AlertLikeBanner />
 
             <List
               grid={{ gutter: 12, column: 3 }}
@@ -411,6 +523,28 @@ function StationMap({ selectedArea }: Props) {
           </div>
         )}
       </Modal>
+    </div>
+  )
+}
+
+function AlertLikeBanner() {
+  return (
+    <div
+      style={{
+        padding: '10px 14px',
+        background: '#e6f7ff',
+        border: '1px solid #91caff',
+        borderRadius: 6,
+        marginBottom: 16,
+        fontSize: 13,
+        color: '#0958d9',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+      }}
+    >
+      <InfoCircleOutlined />
+      提示：点击右上角「趋势分析」按钮，可直接跳转到该站点的温升走势和异常升温识别视图
     </div>
   )
 }

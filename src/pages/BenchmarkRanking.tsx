@@ -36,16 +36,18 @@ interface ViewPreset {
 
 interface Props {
   selectedArea: string
+  onAreaChange?: (area: string) => void
 }
 
 const STORAGE_KEY = 'benchmark_view_presets'
 
-function BenchmarkRanking({ selectedArea }: Props) {
+function BenchmarkRanking({ selectedArea, onAreaChange }: Props) {
   const [sortBy, setSortBy] = useState<'score' | 'highTemp' | 'workOrder' | 'completion' | 'response'>('score')
   const [viewMode, setViewMode] = useState<'rank' | 'compare' | 'maintenance'>('rank')
   const [presets, setPresets] = useState<ViewPreset[]>([])
   const [saveModalVisible, setSaveModalVisible] = useState(false)
   const [form] = Form.useForm()
+  const [activePresetArea, setActivePresetArea] = useState<string>(selectedArea)
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY)
@@ -81,6 +83,12 @@ function BenchmarkRanking({ selectedArea }: Props) {
   }
 
   const handleApplyPreset = (preset: ViewPreset) => {
+    if (preset.area !== activePresetArea) {
+      setActivePresetArea(preset.area)
+      if (onAreaChange) {
+        onAreaChange(preset.area)
+      }
+    }
     if (preset.viewMode !== viewMode) {
       setViewMode(preset.viewMode as any)
     }
@@ -89,6 +97,10 @@ function BenchmarkRanking({ selectedArea }: Props) {
     }
     message.success(`已切换到视图方案：${preset.name}`)
   }
+
+  useEffect(() => {
+    setActivePresetArea(selectedArea)
+  }, [selectedArea])
 
   const handleDeletePreset = (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -131,8 +143,8 @@ function BenchmarkRanking({ selectedArea }: Props) {
 
   const filteredRanks = useMemo(() => {
     let ranks = mockStationRanks
-    if (selectedArea !== 'all') {
-      ranks = ranks.filter(r => r.area === selectedArea)
+    if (activePresetArea !== 'all') {
+      ranks = ranks.filter(r => r.area === activePresetArea)
     }
 
     switch (sortBy) {
@@ -147,7 +159,7 @@ function BenchmarkRanking({ selectedArea }: Props) {
       default:
         return [...ranks].sort((a, b) => b.score - a.score)
     }
-  }, [selectedArea, sortBy])
+  }, [activePresetArea, sortBy])
 
   const poorMaintenanceStations = useMemo(() => {
     return filteredRanks.filter(r =>
@@ -407,7 +419,7 @@ function BenchmarkRanking({ selectedArea }: Props) {
         level,
       ]
     })
-    const areaSuffix = selectedArea === 'all' ? '全区域' : selectedArea
+    const areaSuffix = activePresetArea === 'all' ? '全区域' : activePresetArea
     const sortByText = { score: '综合得分', highTemp: '高温优先', workOrder: '工单优先', completion: '完成率', response: '响应时间' }[sortBy]
     downloadCSV(headers, rows, `巡检排名_${areaSuffix}_${sortByText}_${dayjs().format('YYYYMMDD')}.csv`)
     message.success('巡检排名已导出为CSV文件')

@@ -43,6 +43,15 @@ interface Props {
 
 const STORAGE_KEY = 'review_history_reports'
 
+interface CompareMetrics {
+  highTempGuns: number
+  orderCompletionRate: number
+  rectificationEffectiveness: number
+  avgTemperature: number
+  orderCount: number
+  dangerGuns: number
+}
+
 function ReviewReport({ selectedArea }: Props) {
   const [selectedRectification, setSelectedRectification] = useState<Rectification | null>(null)
   const [detailVisible, setDetailVisible] = useState(false)
@@ -53,6 +62,12 @@ function ReviewReport({ selectedArea }: Props) {
   const [historyFilterFormat, setHistoryFilterFormat] = useState<string>('all')
   const [historyFilterTime, setHistoryFilterTime] = useState<string>('all')
   const [form] = Form.useForm()
+  const [compareRangeBefore, setCompareRangeBefore] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>([
+    dayjs().subtract(60, 'day'), dayjs().subtract(31, 'day')
+  ])
+  const [compareRangeAfter, setCompareRangeAfter] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>([
+    dayjs().subtract(30, 'day'), dayjs()
+  ])
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY)
@@ -169,7 +184,105 @@ function ReviewReport({ selectedArea }: Props) {
     return filtered
   }, [historyReports, historyFilterArea, historyFilterFormat, historyFilterTime])
 
-  const buildReportHtml = useCallback((title: string, dateRange: string, sections: string[]) => {
+  const calcMetricsForRange = useCallback((range: [dayjs.Dayjs, dayjs.Dayjs] | null): CompareMetrics | null => {
+    if (!range || !range[0] || !range[1]) return null
+    const startStr = range[0].format('YYYY-MM-DD')
+    const endStr = range[1].format('YYYY-MM-DD')
+
+    const rangeRecords = mockTempRecords.filter(r => {
+      const d = r.time.split('T')[0]
+      return d >= startStr && d <= endStr
+    })
+    const rangeGuns = rangeRecords.length > 0 ? [...new Set(rangeRecords.map(r => r.gunId))] : []
+    const gunTempsMap = new Map<string, number[]>()
+    rangeRecords.forEach(r => {
+      if (!gunTempsMap.has(r.gunId)) gunTempsMap.set(r.gunId, [])
+      gunTempsMap.get(r.gunId)!.push(r.temperature)
+    })
+    let highTempCount = 0
+    let dangerCount = 0
+    let allTemps: number[] = []
+    gunTempsMap.forEach((temps) => {
+      const maxT = Math.max(...temps)
+      const avgT = temps.reduce((a, b) => a + b, 0) / temps.length
+      allTemps = allTemps.concat(temps)
+      if (maxT > 60) highTempCount++
+      if (maxT > 70) dangerCount++
+    })
+    const avgTemperature = allTemps.length > 0
+      ? Number((allTemps.reduce((a, b) => a + b, 0) / allTemps.length).toFixed(1))
+      : 0
+
+    const rangeOrders = areaOrders.filter(wo => {
+      const d = wo.createTime.split('T')[0]
+      return d >= startStr && d <= endStr
+    })
+    const completedOrders = rangeOrders.filter(wo => wo.status === 'completed' || wo.status === 'closed')
+    const orderCompletionRate = rangeOrders.length > 0
+      ? Math.round((completedOrders.length / rangeOrders.length) * 100)
+      : 0
+
+    const rangeRectifications = filteredRectifications.filter(r => {
+      const d = r.rectifyTime?.split('T')[0]
+      return d && d >= startStr && d <= endStr
+    })
+    const effective = rangeRectifications.filter(r => r.afterTemp < r.beforeTemp * 0.7).length
+    const rectificationEffectiveness = rangeRectifications.length > 0
+      ? Math.round((effective / rangeRectifications.length) * 100)
+      : 0
+
+    return {
+      highTempGuns: highTempCount,
+      orderCompletionRate,
+      rectificationEffectiveness,
+      avgTemperature,
+      orderCount: rangeOrders.length,
+      dangerGuns: dangerCount,
+    }
+  }, [areaOrders, filteredRectifications])
+
+  const compareBeforeMetrics = useMemo(() => calcMetricsForRange(compareRangeBefore), [compareRangeBefore, calcMetricsForRange])
+  const compareAfterMetrics = useMemo(() => calcMetricsForRange(compareRangeAfter), [compareRangeAfter, calcMetricsForRange])
+
+  const renderDiffTag = (before: number | undefined, after: number | undefined, higherIsBetter = false, unit = '') => {
+    if (before === undefined || after === undefined) return <Tag>-</Tag>
+    const diff = after - before
+    const positive = higherIsBetter ? diff >= 0 : diff <= 0
+    const sign = diff > 0 ? '+' : ''
+    const color = positive ? 'green' : 'red'
+    return <Tag color={color}>{sign}{diff}{unit}</Tag>
+  }
+
+  const compareChartOption = useMemo(() => {
+    const before = compareBeforeMetrics
+    const after = compareAfterMetrics
+    if (!before || !after) return {}
+    return {
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      legend: { data: ['对比前', '对比后'], top: 0 },
+      grid: { left: '3%', right: '4%', bottom: '3%', top: '15%', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: ['平均温度(℃)', '高温枪位', '高危枪位', '工单完成率(%)', '整改有效率(%)'],
+        axisLabel: { fontSize: 11 },
+      },
+      yAxis: { type: 'value' },
+      series: [
+        {
+          name: '对比前', type: 'bar',
+          data: [before.avgTemperature, before.highTempGuns, before.dangerGuns, before.orderCompletionRate, before.rectificationEffectiveness],
+          itemStyle: { color: '#faad14', borderRadius: [4, 4, 0, 0] }, barWidth: '30%',
+        },
+        {
+          name: '对比后', type: 'bar',
+          data: [after.avgTemperature, after.highTempGuns, after.dangerGuns, after.orderCompletionRate, after.rectificationEffectiveness],
+          itemStyle: { color: '#52c41a', borderRadius: [4, 4, 0, 0] }, barWidth: '30%',
+        },
+      ],
+    }
+  }, [compareBeforeMetrics, compareAfterMetrics])
+
+  const buildReportHtml = useCallback((title: string, dateRange: string, sections: string[], compareData?: { before: CompareMetrics | null; after: CompareMetrics | null; rangeBefore: string; rangeAfter: string }) => {
     const now = dayjs().format('YYYY-MM-DD HH:mm:ss')
     let html = `<h1>${title}</h1>\n<p class="meta">报告周期：${dateRange}　生成时间：${now}</p>\n`
 
@@ -239,8 +352,27 @@ function ReviewReport({ selectedArea }: Props) {
       }
     }
 
+    if (sections.includes('compare') && compareData && compareData.before && compareData.after) {
+      html += `<h2>六、整改前后对比分析</h2>\n`
+      html += `<p>对比周期：<strong>${compareData.rangeBefore}</strong> 对比 <strong>${compareData.rangeAfter}</strong></p>\n`
+      const b = compareData.before
+      const a = compareData.after
+      const diffHigh = b.highTempGuns - a.highTempGuns
+      const diffRate = a.orderCompletionRate - b.orderCompletionRate
+      const diffEff = a.rectificationEffectiveness - b.rectificationEffectiveness
+      const diffAvg = (b.avgTemperature - a.avgTemperature).toFixed(1)
+      html += `<table><tr><th>指标</th><th>对比前（${compareData.rangeBefore}）</th><th>对比后（${compareData.rangeAfter}）</th><th>变化</th><th>结论</th></tr>`
+      html += `<tr><td>高温枪位数</td><td><span class="tag tag-danger">${b.highTempGuns}</span></td><td>${a.highTempGuns}</td><td>${diffHigh > 0 ? '↓' : diffHigh < 0 ? '↑' : '→'} ${Math.abs(diffHigh)}个</td><td>${diffHigh >= 0 ? '<span class="tag tag-success">改善</span>' : '<span class="tag tag-danger">恶化</span>'}</td></tr>`
+      html += `<tr><td>平均温度</td><td>${b.avgTemperature}℃</td><td>${a.avgTemperature}℃</td><td>${Number(diffAvg) > 0 ? '↓' : Number(diffAvg) < 0 ? '↑' : '→'} ${Math.abs(Number(diffAvg))}℃</td><td>${Number(diffAvg) >= 0 ? '<span class="tag tag-success">改善</span>' : '<span class="tag tag-danger">恶化</span>'}</td></tr>`
+      html += `<tr><td>工单完成率</td><td>${b.orderCompletionRate}%</td><td>${a.orderCompletionRate}%</td><td>${diffRate >= 0 ? '+' : ''}${diffRate}%</td><td>${diffRate >= 0 ? '<span class="tag tag-success">提升</span>' : '<span class="tag tag-danger">下降</span>'}</td></tr>`
+      html += `<tr><td>整改有效率</td><td>${b.rectificationEffectiveness}%</td><td>${a.rectificationEffectiveness}%</td><td>${diffEff >= 0 ? '+' : ''}${diffEff}%</td><td>${diffEff >= 0 ? '<span class="tag tag-success">提升</span>' : '<span class="tag tag-danger">下降</span>'}</td></tr>`
+      html += `<tr><td>高危枪位数</td><td><span class="tag tag-danger">${b.dangerGuns}</span></td><td>${a.dangerGuns}</td><td>${(b.dangerGuns - a.dangerGuns) >= 0 ? '↓' : '↑'} ${Math.abs(b.dangerGuns - a.dangerGuns)}个</td><td>${(b.dangerGuns - a.dangerGuns) >= 0 ? '<span class="tag tag-success">改善</span>' : '<span class="tag tag-danger">恶化</span>'}</td></tr>`
+      html += `</table>\n`
+    }
+
     if (sections.includes('plan')) {
-      html += `<h2>六、下一步工作计划</h2>\n<ul>`
+      const planIndex = sections.includes('compare') ? '七' : '六'
+      html += `<h2>${planIndex}、下一步工作计划</h2>\n<ul>`
       html += `<li>对排名后三位的站点进行专项督导</li>`
       html += `<li>开展高温枪位专项整治行动</li>`
       html += `<li>优化工单响应流程，缩短处理时间</li>`
@@ -267,7 +399,17 @@ function ReviewReport({ selectedArea }: Props) {
       const areaSuffix = selectedArea === 'all' ? '全区域' : selectedArea
       const timestamp = dayjs().format('YYYYMMDDHHmmss')
 
-      const htmlContent = buildReportHtml(title, dateRange, sections)
+      const rangeBeforeStr = compareRangeBefore
+        ? `${compareRangeBefore[0].format('YYYY-MM-DD')} 至 ${compareRangeBefore[1].format('YYYY-MM-DD')}`
+        : ''
+      const rangeAfterStr = compareRangeAfter
+        ? `${compareRangeAfter[0].format('YYYY-MM-DD')} 至 ${compareRangeAfter[1].format('YYYY-MM-DD')}`
+        : ''
+      const compareData = sections.includes('compare') && rangeBeforeStr && rangeAfterStr
+        ? { before: compareBeforeMetrics, after: compareAfterMetrics, rangeBefore: rangeBeforeStr, rangeAfter: rangeAfterStr }
+        : undefined
+
+      const htmlContent = buildReportHtml(title, dateRange, sections, compareData)
 
       if (format === 'pdf') {
         const filename = `${title}_${areaSuffix}_${timestamp}.html`
@@ -597,6 +739,141 @@ function ReviewReport({ selectedArea }: Props) {
             </div>
           </Card>
         </Tabs.TabPane>
+
+        <Tabs.TabPane tab={<span><RiseOutlined style={{ marginRight: 6 }} />整改前后对比</span>} key="4">
+          <Card style={{ marginBottom: 16 }}>
+            <div className="card-section-title" style={{ marginBottom: 16 }}>
+              <FileSearchOutlined style={{ color: '#1677ff' }} />
+              选择两个时间段进行对比分析
+            </div>
+            <Row gutter={16} align="middle">
+              <Col span={11}>
+                <div style={{ color: '#666', marginBottom: 8 }}><Tag color="orange">对比前</Tag> 时间段：</div>
+                <RangePicker
+                  value={compareRangeBefore as any}
+                  onChange={(val) => setCompareRangeBefore(val as any)}
+                  style={{ width: '100%' }}
+                />
+              </Col>
+              <Col span={2} style={{ textAlign: 'center', fontSize: 24, color: '#1677ff' }}>
+                VS
+              </Col>
+              <Col span={11}>
+                <div style={{ color: '#666', marginBottom: 8 }}><Tag color="green">对比后</Tag> 时间段：</div>
+                <RangePicker
+                  value={compareRangeAfter as any}
+                  onChange={(val) => setCompareRangeAfter(val as any)}
+                  style={{ width: '100%' }}
+                />
+              </Col>
+            </Row>
+          </Card>
+
+          <Row gutter={16}>
+            <Col span={12}>
+              <Card
+                title={
+                  <div className="card-section-title">
+                    <RiseOutlined style={{ color: '#faad14' }} />
+                    管理指标对比图
+                  </div>
+                }
+                extra={<Tag color="blue">数值越低越好/越高越好（详见图例）</Tag>}
+              >
+                <ReactECharts option={compareChartOption} style={{ height: 360 }} />
+              </Card>
+            </Col>
+            <Col span={12}>
+              <Card
+                title={
+                  <div className="card-section-title">
+                    <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                    关键指标变化明细
+                  </div>
+                }
+              >
+                {compareBeforeMetrics && compareAfterMetrics ? (
+                  <div>
+                    <Row gutter={[12, 12]}>
+                      <Col span={12}>
+                        <div style={{ padding: 16, background: '#fafafa', borderRadius: 8 }}>
+                          <div style={{ fontSize: 12, color: '#999', marginBottom: 6 }}>平均温度变化</div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                            <span style={{ fontSize: 20, fontWeight: 'bold' }}>
+                              {compareBeforeMetrics.avgTemperature}℃ <ArrowRightOutlined style={{ fontSize: 12, color: '#999' }} /> {compareAfterMetrics.avgTemperature}℃
+                            </span>
+                            {renderDiffTag(compareBeforeMetrics.avgTemperature, compareAfterMetrics.avgTemperature, false, '℃')}
+                          </div>
+                        </div>
+                      </Col>
+                      <Col span={12}>
+                        <div style={{ padding: 16, background: '#fff1f0', borderRadius: 8 }}>
+                          <div style={{ fontSize: 12, color: '#999', marginBottom: 6 }}>高温枪位数变化</div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                            <span style={{ fontSize: 20, fontWeight: 'bold', color: '#ff4d4f' }}>
+                              {compareBeforeMetrics.highTempGuns} <ArrowRightOutlined style={{ fontSize: 12, color: '#999' }} /> {compareAfterMetrics.highTempGuns}
+                            </span>
+                            {renderDiffTag(compareBeforeMetrics.highTempGuns, compareAfterMetrics.highTempGuns, false, '个')}
+                          </div>
+                        </div>
+                      </Col>
+                      <Col span={12}>
+                        <div style={{ padding: 16, background: '#fff7e6', borderRadius: 8 }}>
+                          <div style={{ fontSize: 12, color: '#999', marginBottom: 6 }}>高危枪位数（{'>'}70℃）</div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                            <span style={{ fontSize: 20, fontWeight: 'bold', color: '#d4380d' }}>
+                              {compareBeforeMetrics.dangerGuns} <ArrowRightOutlined style={{ fontSize: 12, color: '#999' }} /> {compareAfterMetrics.dangerGuns}
+                            </span>
+                            {renderDiffTag(compareBeforeMetrics.dangerGuns, compareAfterMetrics.dangerGuns, false, '个')}
+                          </div>
+                        </div>
+                      </Col>
+                      <Col span={12}>
+                        <div style={{ padding: 16, background: '#e6f7ff', borderRadius: 8 }}>
+                          <div style={{ fontSize: 12, color: '#999', marginBottom: 6 }}>工单完成率</div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                            <span style={{ fontSize: 20, fontWeight: 'bold', color: '#1677ff' }}>
+                              {compareBeforeMetrics.orderCompletionRate}% <ArrowRightOutlined style={{ fontSize: 12, color: '#999' }} /> {compareAfterMetrics.orderCompletionRate}%
+                            </span>
+                            {renderDiffTag(compareBeforeMetrics.orderCompletionRate, compareAfterMetrics.orderCompletionRate, true, '%')}
+                          </div>
+                        </div>
+                      </Col>
+                      <Col span={12}>
+                        <div style={{ padding: 16, background: '#f6ffed', borderRadius: 8 }}>
+                          <div style={{ fontSize: 12, color: '#999', marginBottom: 6 }}>整改有效率</div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                            <span style={{ fontSize: 20, fontWeight: 'bold', color: '#52c41a' }}>
+                              {compareBeforeMetrics.rectificationEffectiveness}% <ArrowRightOutlined style={{ fontSize: 12, color: '#999' }} /> {compareAfterMetrics.rectificationEffectiveness}%
+                            </span>
+                            {renderDiffTag(compareBeforeMetrics.rectificationEffectiveness, compareAfterMetrics.rectificationEffectiveness, true, '%')}
+                          </div>
+                        </div>
+                      </Col>
+                      <Col span={12}>
+                        <div style={{ padding: 16, background: '#f0f5ff', borderRadius: 8 }}>
+                          <div style={{ fontSize: 12, color: '#999', marginBottom: 6 }}>工单总数</div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                            <span style={{ fontSize: 20, fontWeight: 'bold' }}>
+                              {compareBeforeMetrics.orderCount} <ArrowRightOutlined style={{ fontSize: 12, color: '#999' }} /> {compareAfterMetrics.orderCount}
+                            </span>
+                            {renderDiffTag(compareBeforeMetrics.orderCount, compareAfterMetrics.orderCount, false, '单')}
+                          </div>
+                        </div>
+                      </Col>
+                    </Row>
+                    <div style={{ marginTop: 16, padding: 12, background: '#e6f7ff', borderRadius: 6, fontSize: 13, color: '#0958d9' }}>
+                      <FileSearchOutlined style={{ marginRight: 6 }} />
+                      提示：在「生成报告」时勾选「整改前后对比分析」可将本对比表直接写入复盘报告
+                    </div>
+                  </div>
+                ) : (
+                  <Empty description="请选择两个完整的时间段以进行对比" style={{ padding: '60px 0' }} />
+                )}
+              </Card>
+            </Col>
+          </Row>
+        </Tabs.TabPane>
       </Tabs>
 
       <Modal
@@ -710,6 +987,7 @@ function ReviewReport({ selectedArea }: Props) {
                 { value: 'workOrder', label: '工单处理效率' },
                 { value: 'ranking', label: '对标排名情况' },
                 { value: 'rectification', label: '整改措施与成效' },
+                { value: 'compare', label: '整改前后对比分析' },
                 { value: 'plan', label: '下一步工作计划' },
               ]}
               style={{ width: '100%' }}
