@@ -16,7 +16,9 @@ import {
   ToolOutlined,
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
+import dayjs from 'dayjs'
 import { mockStationRanks, mockStations, mockGuns, mockWorkOrders } from '../mock'
+import { downloadCSV } from '../utils/export'
 import type { StationRank } from '../types'
 
 interface Props {
@@ -289,7 +291,25 @@ function BenchmarkRanking({ selectedArea }: Props) {
   ]
 
   const handleExport = () => {
-    message.success('巡检排名表已导出')
+    const headers = ['排名', '站点名称', '区域', '负责人', '综合得分', '高温枪位数', '工单数量', '工单完成率(%)', '平均响应时间(分钟)', '等级']
+    const rows = filteredRanks.map((r, i) => {
+      const level = r.score >= 85 ? '优秀' : r.score >= 75 ? '良好' : r.score >= 60 ? '合格' : '不合格'
+      return [
+        String(i + 1),
+        r.stationName,
+        r.area,
+        r.manager,
+        String(r.score),
+        String(r.highTempCount),
+        String(r.workOrderCount),
+        String(r.completionRate),
+        String(r.avgResponseTime),
+        level,
+      ]
+    })
+    const areaSuffix = selectedArea === 'all' ? '全区域' : selectedArea
+    downloadCSV(headers, rows, `巡检排名_${areaSuffix}_${dayjs().format('YYYYMMDD')}.csv`)
+    message.success('巡检排名已导出为CSV文件')
   }
 
   return (

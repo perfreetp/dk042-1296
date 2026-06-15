@@ -1,11 +1,11 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useCallback } from 'react'
 import {
   Row, Col, Card, Button, Tabs, List, Tag, Progress, Modal, Form,
   Input, Select, DatePicker, message, Divider, Space, Descriptions,
+  Empty,
 } from 'antd'
 import {
   FileSearchOutlined,
-  ArrowLeftOutlined,
   ArrowRightOutlined,
   CheckCircleOutlined,
   DownloadOutlined,
@@ -15,16 +15,27 @@ import {
   RiseOutlined,
   FallOutlined,
   CalendarOutlined,
-  EnvironmentOutlined,
   UserOutlined,
+  DeleteOutlined,
+  FolderOpenOutlined,
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
 import { mockRectifications, mockStations, mockGuns, mockTempRecords, mockStationRanks, mockWorkOrders } from '../mock'
+import { downloadCSV, downloadHTML, downloadExcelXML } from '../utils/export'
 import type { Rectification } from '../types'
 
-const { TextArea } = Input
 const { RangePicker } = DatePicker
+
+interface HistoryReport {
+  id: string
+  title: string
+  area: string
+  type: string
+  format: string
+  createTime: string
+  dateRange: string
+}
 
 interface Props {
   selectedArea: string
@@ -34,6 +45,8 @@ function ReviewReport({ selectedArea }: Props) {
   const [selectedRectification, setSelectedRectification] = useState<Rectification | null>(null)
   const [detailVisible, setDetailVisible] = useState(false)
   const [generateModalVisible, setGenerateModalVisible] = useState(false)
+  const [historyModalVisible, setHistoryModalVisible] = useState(false)
+  const [historyReports, setHistoryReports] = useState<HistoryReport[]>([])
   const [form] = Form.useForm()
 
   const filteredRectifications = useMemo(() => {
@@ -48,7 +61,6 @@ function ReviewReport({ selectedArea }: Props) {
     const avgTempDrop = total > 0
       ? (filteredRectifications.reduce((sum, r) => sum + (r.beforeTemp - r.afterTemp), 0) / total).toFixed(1)
       : '0'
-
     return { total, effective, avgTempDrop }
   }, [filteredRectifications])
 
@@ -59,117 +71,196 @@ function ReviewReport({ selectedArea }: Props) {
       d.setMonth(d.getMonth() - i)
       months.push(dayjs(d).format('YYYY-MM'))
     }
-
     const rectifyCounts = months.map(() => Math.floor(Math.random() * 8) + 3)
     const effectiveRate = rectifyCounts.map(() => Math.floor(Math.random() * 30) + 65)
-
     return {
-      tooltip: {
-        trigger: 'axis',
-        axisPointer: { type: 'cross' },
-      },
-      legend: {
-        data: ['整改数量', '整改有效率'],
-        top: 0,
-      },
-      grid: {
-        left: '3%',
-        right: '4%',
-        bottom: '3%',
-        top: '15%',
-        containLabel: true,
-      },
-      xAxis: {
-        type: 'category',
-        data: months,
-      },
+      tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+      legend: { data: ['整改数量', '整改有效率'], top: 0 },
+      grid: { left: '3%', right: '4%', bottom: '3%', top: '15%', containLabel: true },
+      xAxis: { type: 'category', data: months },
       yAxis: [
-        {
-          type: 'value',
-          name: '数量',
-          position: 'left',
-        },
-        {
-          type: 'value',
-          name: '有效率(%)',
-          position: 'right',
-          max: 100,
-        },
+        { type: 'value', name: '数量', position: 'left' },
+        { type: 'value', name: '有效率(%)', position: 'right', max: 100 },
       ],
       series: [
-        {
-          name: '整改数量',
-          type: 'bar',
-          data: rectifyCounts,
-          itemStyle: {
-            color: '#1677ff',
-            borderRadius: [4, 4, 0, 0],
-          },
-          barWidth: '40%',
-          yAxisIndex: 0,
-        },
-        {
-          name: '整改有效率',
-          type: 'line',
-          data: effectiveRate,
-          smooth: true,
-          itemStyle: { color: '#52c41a' },
-          yAxisIndex: 1,
-        },
+        { name: '整改数量', type: 'bar', data: rectifyCounts, itemStyle: { color: '#1677ff', borderRadius: [4, 4, 0, 0] }, barWidth: '40%', yAxisIndex: 0 },
+        { name: '整改有效率', type: 'line', data: effectiveRate, smooth: true, itemStyle: { color: '#52c41a' }, yAxisIndex: 1 },
       ],
     }
   }, [])
 
   const beforeAfterCompareOption = (rect: Rectification) => ({
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: { type: 'shadow' },
-    },
-    legend: {
-      data: ['整改前', '整改后'],
-      top: 0,
-    },
-    grid: {
-      left: '3%',
-      right: '4%',
-      bottom: '3%',
-      top: '15%',
-      containLabel: true,
-    },
-    xAxis: {
-      type: 'category',
-      data: ['最高温度', '平均温度', '故障频率'],
-    },
-    yAxis: {
-      type: 'value',
-      name: '数值',
-    },
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    legend: { data: ['整改前', '整改后'], top: 0 },
+    grid: { left: '3%', right: '4%', bottom: '3%', top: '15%', containLabel: true },
+    xAxis: { type: 'category', data: ['最高温度', '平均温度', '故障频率'] },
+    yAxis: { type: 'value', name: '数值' },
     series: [
-      {
-        name: '整改前',
-        type: 'bar',
-        data: [rect.beforeTemp, rect.beforeTemp - 10, 5],
-        itemStyle: { color: '#ff4d4f' },
-        barWidth: '30%',
-      },
-      {
-        name: '整改后',
-        type: 'bar',
-        data: [rect.afterTemp, rect.afterTemp - 5, 1],
-        itemStyle: { color: '#52c41a' },
-        barWidth: '30%',
-      },
+      { name: '整改前', type: 'bar', data: [rect.beforeTemp, rect.beforeTemp - 10, 5], itemStyle: { color: '#ff4d4f' }, barWidth: '30%' },
+      { name: '整改后', type: 'bar', data: [rect.afterTemp, rect.afterTemp - 5, 1], itemStyle: { color: '#52c41a' }, barWidth: '30%' },
     ],
   })
 
+  const areaStations = useMemo(() => {
+    return mockStations.filter(s => selectedArea === 'all' || s.area === selectedArea)
+  }, [selectedArea])
+
+  const areaGuns = useMemo(() => {
+    const stationIds = new Set(areaStations.map(s => s.id))
+    return mockGuns.filter(g => stationIds.has(g.stationId))
+  }, [areaStations])
+
+  const areaOrders = useMemo(() => {
+    const stationIds = new Set(areaStations.map(s => s.id))
+    return mockWorkOrders.filter(wo => stationIds.has(wo.stationId))
+  }, [areaStations])
+
+  const dangerGuns = useMemo(() => {
+    return areaGuns.filter(g => g.status === 'danger')
+  }, [areaGuns])
+
+  const buildReportHtml = useCallback((title: string, dateRange: string, sections: string[]) => {
+    const now = dayjs().format('YYYY-MM-DD HH:mm:ss')
+    let html = `<h1>${title}</h1>\n<p class="meta">报告周期：${dateRange}　生成时间：${now}</p>\n`
+
+    if (sections.includes('overview')) {
+      html += `<h2>一、总体情况</h2>\n`
+      html += `<p>本期覆盖 <strong>${areaStations.length}</strong> 个充电站，共计 <strong>${areaGuns.length}</strong> 个充电枪位。`
+      html += `本月累计发生 <strong>${areaOrders.length}</strong> 起设备故障工单。</p>\n`
+      html += `<table><tr><th>指标</th><th>数值</th></tr>`
+      html += `<tr><td>站点数</td><td>${areaStations.length}</td></tr>`
+      html += `<tr><td>枪位总数</td><td>${areaGuns.length}</td></tr>`
+      html += `<tr><td>高温枪位</td><td><span class="tag tag-danger">${dangerGuns.length}</span></td></tr>`
+      html += `<tr><td>工单总数</td><td>${areaOrders.length}</td></tr>`
+      html += `</table>\n`
+    }
+
+    if (sections.includes('tempAnalysis')) {
+      html += `<h2>二、高温风险分析</h2>\n`
+      html += `<p>本月高温枪位（>60℃）共 <strong><span class="tag tag-danger">${dangerGuns.length}</span></strong> 个，`
+      const ratio = areaGuns.length > 0 ? ((dangerGuns.length / areaGuns.length) * 100).toFixed(1) : '0'
+      html += `占总枪位数的 ${ratio}%。</p>\n`
+      const hotStations = areaStations.filter(s => s.highTempGuns > 0)
+      if (hotStations.length > 0) {
+        html += `<table><tr><th>站点</th><th>高温枪位</th><th>预警枪位</th><th>负责人</th></tr>`
+        hotStations.forEach(s => {
+          html += `<tr><td>${s.name}</td><td><span class="tag tag-danger">${s.highTempGuns}</span></td><td><span class="tag tag-warning">${s.warningGuns}</span></td><td>${s.manager}</td></tr>`
+        })
+        html += `</table>\n`
+      }
+    }
+
+    if (sections.includes('workOrder')) {
+      html += `<h2>三、工单处理效率</h2>\n`
+      const completedOrders = areaOrders.filter(wo => wo.status === 'completed' || wo.status === 'closed')
+      const completionRate = areaOrders.length > 0 ? Math.round((completedOrders.length / areaOrders.length) * 100) : 0
+      const pendingOrders = areaOrders.filter(wo => wo.status === 'pending').length
+      html += `<table><tr><th>指标</th><th>数值</th></tr>`
+      html += `<tr><td>工单总数</td><td>${areaOrders.length}</td></tr>`
+      html += `<tr><td>已完成</td><td>${completedOrders.length}</td></tr>`
+      html += `<tr><td>待处理</td><td><span class="tag tag-warning">${pendingOrders}</span></td></tr>`
+      html += `<tr><td>完成率</td><td><span class="tag ${completionRate >= 80 ? 'tag-success' : 'tag-danger'}">${completionRate}%</span></td></tr>`
+      html += `</table>\n`
+    }
+
+    if (sections.includes('ranking')) {
+      html += `<h2>四、对标排名情况</h2>\n`
+      const areaRanks = mockStationRanks.filter(r => selectedArea === 'all' || r.area === selectedArea)
+      html += `<table><tr><th>排名</th><th>站点</th><th>区域</th><th>综合得分</th><th>高温枪位</th><th>完成率</th><th>负责人</th></tr>`
+      areaRanks.forEach((r, i) => {
+        const levelClass = r.score >= 85 ? 'tag-success' : r.score >= 70 ? 'tag-blue' : 'tag-danger'
+        html += `<tr><td>${i + 1}</td><td>${r.stationName}</td><td>${r.area}</td><td><span class="tag ${levelClass}">${r.score}</span></td><td>${r.highTempCount}</td><td>${r.completionRate}%</td><td>${r.manager}</td></tr>`
+      })
+      html += `</table>\n`
+    }
+
+    if (sections.includes('rectification')) {
+      html += `<h2>五、整改措施与成效</h2>\n`
+      html += `<p>本月完成整改 <strong>${filteredRectifications.length}</strong> 项，`
+      html += `整改有效率 <strong>${stats.total > 0 ? ((stats.effective / stats.total) * 100).toFixed(0) : 0}%</strong>，`
+      html += `平均温度下降 <strong>${stats.avgTempDrop}℃</strong>。</p>\n`
+      if (filteredRectifications.length > 0) {
+        html += `<table><tr><th>站点</th><th>故障类型</th><th>整改前温度</th><th>整改后温度</th><th>降幅</th><th>操作人</th></tr>`
+        filteredRectifications.forEach(r => {
+          const drop = ((r.beforeTemp - r.afterTemp) / r.beforeTemp * 100).toFixed(1)
+          html += `<tr><td>${r.stationName}</td><td>${r.issue}</td><td><span class="tag tag-danger">${r.beforeTemp.toFixed(1)}℃</span></td><td><span class="tag tag-success">${r.afterTemp.toFixed(1)}℃</span></td><td>${drop}%</td><td>${r.operator}</td></tr>`
+        })
+        html += `</table>\n`
+      }
+    }
+
+    if (sections.includes('plan')) {
+      html += `<h2>六、下一步工作计划</h2>\n<ul>`
+      html += `<li>对排名后三位的站点进行专项督导</li>`
+      html += `<li>开展高温枪位专项整治行动</li>`
+      html += `<li>优化工单响应流程，缩短处理时间</li>`
+      html += `<li>加强运维人员培训，提升专业技能</li>`
+      html += `<li>建立复发故障跟踪机制，确保整改到位</li>`
+      html += `</ul>\n`
+    }
+
+    html += `<footer><p>报告生成时间：${now}</p><p>报告人：区域经理</p></footer>`
+    return html
+  }, [areaStations, areaGuns, areaOrders, dangerGuns, filteredRectifications, stats, selectedArea])
+
   const handleGenerateReport = () => {
     form.validateFields().then(values => {
-      message.success('区域安全复盘报告生成中...')
-      setTimeout(() => {
-        message.success('报告生成成功，已保存到本地')
-        setGenerateModalVisible(false)
-      }, 1500)
+      const title = values.reportTitle || '充电站安全运营复盘报告'
+      const dateRange = values.dateRange
+        ? `${values.dateRange[0].format('YYYY-MM-DD')} 至 ${values.dateRange[1].format('YYYY-MM-DD')}`
+        : `${dayjs().subtract(30, 'day').format('YYYY-MM-DD')} 至 ${dayjs().format('YYYY-MM-DD')}`
+      const sections = values.includeSections || ['overview', 'tempAnalysis', 'workOrder', 'ranking', 'rectification', 'plan']
+      const format = values.format || 'pdf'
+      const reportType = values.reportType || 'monthly'
+      const typeLabelMap: Record<string, string> = { monthly: '月度', quarterly: '季度', special: '专项', custom: '自定义' }
+      const typeLabel = typeLabelMap[reportType] || '月度'
+      const areaSuffix = selectedArea === 'all' ? '全区域' : selectedArea
+      const timestamp = dayjs().format('YYYYMMDDHHmmss')
+
+      const htmlContent = buildReportHtml(title, dateRange, sections)
+
+      if (format === 'pdf') {
+        const filename = `${title}_${areaSuffix}_${timestamp}.html`
+        downloadHTML(htmlContent, filename)
+        message.success(`报告已生成HTML文件（可用浏览器打开后打印为PDF）：${filename}`)
+      } else if (format === 'word') {
+        const filename = `${title}_${areaSuffix}_${timestamp}.html`
+        downloadHTML(htmlContent, filename)
+        message.success(`报告已生成HTML文件（可用Word打开后另存为.doc）：${filename}`)
+      } else if (format === 'excel') {
+        const headers = ['站点名称', '区域', '综合得分', '高温枪位', '工单完成率(%)', '平均响应时间(分钟)', '负责人']
+        const areaRanks = mockStationRanks.filter(r => selectedArea === 'all' || r.area === selectedArea)
+        const rows = areaRanks.map(r => [r.stationName, r.area, r.score, r.highTempCount, r.completionRate, r.avgResponseTime, r.manager])
+        const filename = `${title}_${areaSuffix}_${timestamp}.xls`
+        downloadExcelXML(headers, rows, filename)
+        message.success(`报告数据已导出Excel文件：${filename}`)
+      }
+
+      const newReport: HistoryReport = {
+        id: `RPT${timestamp}`,
+        title,
+        area: areaSuffix,
+        type: typeLabel,
+        format: format === 'pdf' ? 'HTML/PDF' : format === 'word' ? 'HTML/Word' : 'Excel',
+        createTime: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+        dateRange,
+      }
+      setHistoryReports(prev => [newReport, ...prev])
+      setGenerateModalVisible(false)
     })
+  }
+
+  const handleExportHistoryReport = (report: HistoryReport) => {
+    const sections = ['overview', 'tempAnalysis', 'workOrder', 'ranking', 'rectification', 'plan']
+    const htmlContent = buildReportHtml(report.title, report.dateRange, sections)
+    const filename = `${report.title}_${report.area}_${report.id}.html`
+    downloadHTML(htmlContent, filename)
+    message.success(`历史报告已导出：${filename}`)
+  }
+
+  const handleDeleteHistoryReport = (id: string) => {
+    setHistoryReports(prev => prev.filter(r => r.id !== id))
+    message.success('已删除该历史报告')
   }
 
   const openDetail = (rect: Rectification) => {
@@ -217,7 +308,7 @@ function ReviewReport({ selectedArea }: Props) {
             <Button type="primary" icon={<PlusOutlined />} block size="large" onClick={() => setGenerateModalVisible(true)}>
               生成复盘报告
             </Button>
-            <Button icon={<DownloadOutlined />} block style={{ marginTop: 8 }}>
+            <Button icon={<FolderOpenOutlined />} block style={{ marginTop: 8 }} onClick={() => setHistoryModalVisible(true)}>
               导出历史报告
             </Button>
           </Card>
@@ -267,7 +358,7 @@ function ReviewReport({ selectedArea }: Props) {
                             <span><CalendarOutlined style={{ marginRight: 4 }} />{item.rectifyTime?.slice(0, 10)}</span>
                             <span><UserOutlined style={{ marginRight: 4 }} />{item.operator}</span>
                             <span>
-                              温度: 
+                              温度:
                               <span style={{ color: '#ff4d4f', fontWeight: 'bold', marginLeft: 4 }}>
                                 {item.beforeTemp.toFixed(1)}℃
                               </span>
@@ -401,59 +492,36 @@ function ReviewReport({ selectedArea }: Props) {
 
               <Divider orientation="left">一、总体情况</Divider>
               <p>
-                本期覆盖 {mockStations.filter(s => selectedArea === 'all' || s.area === selectedArea).length} 个充电站，
-                共计 {mockGuns.filter(g => {
-                  if (selectedArea === 'all') return true
-                  const station = mockStations.find(s => s.id === g.stationId)
-                  return station?.area === selectedArea
-                }).length} 个充电枪位。
-                本月累计发生 {mockWorkOrders.filter(wo => {
-                  if (selectedArea === 'all') return true
-                  const station = mockStations.find(s => s.id === wo.stationId)
-                  return station?.area === selectedArea
-                }).length} 起设备故障工单，
-                较上月 {Math.random() > 0.5 ? '上升' : '下降'} {Math.floor(Math.random() * 30) + 5}%。
+                本期覆盖 {areaStations.length} 个充电站，
+                共计 {areaGuns.length} 个充电枪位。
+                本月累计发生 {areaOrders.length} 起设备故障工单。
               </p>
 
               <Divider orientation="left">二、高温风险分析</Divider>
               <p>
-                本月高温枪位（{' > '}60℃）共 {mockGuns.filter(g => g.status === 'danger' && (selectedArea === 'all' || mockStations.find(s => s.id === g.stationId)?.area === selectedArea)).length} 个，
-                占总枪位数的 {((mockGuns.filter(g => g.status === 'danger' && (selectedArea === 'all' || mockStations.find(s => s.id === g.stationId)?.area === selectedArea)).length / mockGuns.filter(g => selectedArea === 'all' || mockStations.find(s => s.id === g.stationId)?.area === selectedArea).length) * 100).toFixed(1)}%。
+                本月高温枪位（{'>'}60℃）共 {dangerGuns.length} 个，
+                占总枪位数的 {areaGuns.length > 0 ? ((dangerGuns.length / areaGuns.length) * 100).toFixed(1) : '0'}%。
                 主要集中在以下站点：
-                {mockStations.filter(s => s.highTempGuns > 2 && (selectedArea === 'all' || s.area === selectedArea)).map(s => s.name).join('、')}。
-              </p>
-              <p>
-                从设备型号来看，{['比亚迪DC-120kW', '特斯拉V3-250kW'][Math.floor(Math.random() * 2)]} 系列设备温升问题较为突出，
-                建议重点关注。
+                {areaStations.filter(s => s.highTempGuns > 2).map(s => s.name).join('、')}。
               </p>
 
               <Divider orientation="left">三、工单处理效率</Divider>
               <p>
-                本月工单平均响应时间 {Math.floor(Math.random() * 30) + 20} 分钟，
-                平均处理时长 {Math.floor(Math.random() * 12) + 4} 小时，
-                工单完成率 {Math.floor(Math.random() * 20) + 75}%。
-              </p>
-              <p>
-                高频复发故障点共 {Math.floor(Math.random() * 5) + 3} 个，
-                主要问题类型为枪线过热和连接器故障。
-                建议对复发点进行专项整改。
+                工单完成率 {areaOrders.length > 0 ? Math.round((areaOrders.filter(wo => wo.status === 'completed' || wo.status === 'closed').length / areaOrders.length) * 100) : 0}%，
+                待处理工单 {areaOrders.filter(wo => wo.status === 'pending').length} 个。
               </p>
 
               <Divider orientation="left">四、对标排名情况</Divider>
               <p>
                 综合排名前三的站点为：
-                {mockStationRanks.slice(0, 3).map(r => r.stationName).join('、')}。
-                排名靠后的站点需加强日常巡检和维护工作。
+                {mockStationRanks.filter(r => selectedArea === 'all' || r.area === selectedArea).slice(0, 3).map(r => r.stationName).join('、')}。
               </p>
 
               <Divider orientation="left">五、整改措施与成效</Divider>
               <p>
                 本月完成整改 {filteredRectifications.length} 项，
-                整改有效率 {((stats.effective / stats.total) * 100).toFixed(0)}%，
+                整改有效率 {stats.total > 0 ? ((stats.effective / stats.total) * 100).toFixed(0) : 0}%，
                 平均温度下降 {stats.avgTempDrop}℃。
-              </p>
-              <p>
-                典型案例：
               </p>
               <ul style={{ paddingLeft: 20 }}>
                 {filteredRectifications.slice(0, 3).map(r => (
@@ -552,6 +620,7 @@ function ReviewReport({ selectedArea }: Props) {
         open={generateModalVisible}
         onCancel={() => setGenerateModalVisible(false)}
         onOk={handleGenerateReport}
+        okText="生成并下载"
         width={600}
       >
         <Form form={form} layout="vertical">
@@ -559,17 +628,19 @@ function ReviewReport({ selectedArea }: Props) {
             name="reportTitle"
             label="报告标题"
             rules={[{ required: true, message: '请输入报告标题' }]}
+            initialValue={`${selectedArea === 'all' ? '全区域' : selectedArea}充电站安全运营复盘报告`}
           >
-            <Input placeholder="请输入报告标题" defaultValue={`${selectedArea === 'all' ? '全区域' : selectedArea}充电站安全运营复盘报告`} />
+            <Input placeholder="请输入报告标题" />
           </Form.Item>
           <Form.Item
             name="dateRange"
             label="统计周期"
             rules={[{ required: true, message: '请选择统计周期' }]}
+            initialValue={[dayjs().subtract(30, 'day'), dayjs()]}
           >
-            <RangePicker style={{ width: '100%' }} defaultValue={[dayjs().subtract(30, 'day'), dayjs()]} />
+            <RangePicker style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item name="reportType" label="报告类型">
+          <Form.Item name="reportType" label="报告类型" initialValue="monthly">
             <Select
               options={[
                 { value: 'monthly', label: '月度复盘报告' },
@@ -577,10 +648,9 @@ function ReviewReport({ selectedArea }: Props) {
                 { value: 'special', label: '专项整改报告' },
                 { value: 'custom', label: '自定义报告' },
               ]}
-              defaultValue="monthly"
             />
           </Form.Item>
-          <Form.Item name="includeSections" label="包含内容">
+          <Form.Item name="includeSections" label="包含内容" initialValue={['overview', 'tempAnalysis', 'workOrder', 'ranking', 'rectification', 'plan']}>
             <Select
               mode="multiple"
               placeholder="请选择要包含的内容"
@@ -592,21 +662,92 @@ function ReviewReport({ selectedArea }: Props) {
                 { value: 'rectification', label: '整改措施与成效' },
                 { value: 'plan', label: '下一步工作计划' },
               ]}
-              defaultValue={['overview', 'tempAnalysis', 'workOrder', 'ranking', 'rectification', 'plan']}
               style={{ width: '100%' }}
             />
           </Form.Item>
-          <Form.Item name="format" label="导出格式">
+          <Form.Item name="format" label="导出格式" initialValue="pdf"
+            extra="PDF/Word格式生成可打印的HTML文件，Excel格式导出排名数据表"
+          >
             <Select
               options={[
-                { value: 'pdf', label: 'PDF格式' },
-                { value: 'word', label: 'Word格式' },
-                { value: 'excel', label: 'Excel格式' },
+                { value: 'pdf', label: 'PDF格式（生成HTML，可用浏览器打印为PDF）' },
+                { value: 'word', label: 'Word格式（生成HTML，可用Word打开另存为.doc）' },
+                { value: 'excel', label: 'Excel格式（生成.xls数据表）' },
               ]}
-              defaultValue="pdf"
             />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="历史报告列表"
+        open={historyModalVisible}
+        onCancel={() => setHistoryModalVisible(false)}
+        footer={null}
+        width={700}
+      >
+        {historyReports.length === 0 ? (
+          <Empty
+            description="暂无历史报告"
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            style={{ padding: '48px 0' }}
+          >
+            <Button type="primary" onClick={() => { setHistoryModalVisible(false); setGenerateModalVisible(true) }}>
+              生成第一份报告
+            </Button>
+          </Empty>
+        ) : (
+          <List
+            dataSource={historyReports}
+            renderItem={report => (
+              <List.Item
+                actions={[
+                  <Button
+                    type="link"
+                    icon={<DownloadOutlined />}
+                    onClick={() => handleExportHistoryReport(report)}
+                  >
+                    导出
+                  </Button>,
+                  <Button
+                    type="link"
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={() => handleDeleteHistoryReport(report.id)}
+                  >
+                    删除
+                  </Button>,
+                ]}
+              >
+                <List.Item.Meta
+                  avatar={
+                    <div style={{
+                      width: 44, height: 44, borderRadius: 8,
+                      background: '#e6f7ff',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>
+                      <FileTextOutlined style={{ color: '#1677ff', fontSize: 22 }} />
+                    </div>
+                  }
+                  title={
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span>{report.title}</span>
+                      <Tag color="blue">{report.type}</Tag>
+                      <Tag>{report.format}</Tag>
+                    </div>
+                  }
+                  description={
+                    <div style={{ display: 'flex', gap: 16, marginTop: 4, color: '#999', fontSize: 13 }}>
+                      <span><CalendarOutlined style={{ marginRight: 4 }} />{report.createTime}</span>
+                      <span>区域：{report.area}</span>
+                      <span>周期：{report.dateRange}</span>
+                    </div>
+                  }
+                />
+              </List.Item>
+            )}
+          />
+        )}
       </Modal>
     </div>
   )

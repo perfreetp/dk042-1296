@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { Row, Col, Card, Select, DatePicker, Tabs, Tag, List, Progress, Tooltip } from 'antd'
+import { Row, Col, Card, Select, DatePicker, Tabs, Tag, List, Progress } from 'antd'
 import {
   LineChartOutlined,
   ThunderboltOutlined,
@@ -11,7 +11,6 @@ import {
 import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
 import { mockStations, mockGuns, mockTempRecords, mockWeatherData } from '../mock'
-import type { Station } from '../types'
 
 const { RangePicker } = DatePicker
 
@@ -28,28 +27,39 @@ function TrendAnalysis({ selectedArea }: Props) {
     return mockStations.filter(s => s.area === selectedArea)
   }, [selectedArea])
 
+  const filteredStationIds = useMemo(() => {
+    return new Set(filteredStations.map(s => s.id))
+  }, [filteredStations])
+
   const filteredGuns = useMemo(() => {
     let guns = mockGuns
     if (selectedStationId !== 'all') {
       guns = guns.filter(g => g.stationId === selectedStationId)
     } else if (selectedArea !== 'all') {
-      const stationIds = filteredStations.map(s => s.id)
-      guns = guns.filter(g => stationIds.includes(g.stationId))
+      guns = guns.filter(g => filteredStationIds.has(g.stationId))
     }
     if (selectedGunModel !== 'all') {
       guns = guns.filter(g => g.model === selectedGunModel)
     }
     return guns
-  }, [selectedStationId, selectedGunModel, filteredStations, selectedArea])
+  }, [selectedStationId, selectedGunModel, filteredStationIds, selectedArea])
 
   const gunModels = useMemo(() => {
-    const models = [...new Set(mockGuns.map(g => g.model))]
-    return models
+    return [...new Set(mockGuns.map(g => g.model))]
   }, [])
 
+  const now = useMemo(() => new Date(), [])
+
+  const filteredRecords = useMemo(() => {
+    return mockTempRecords.filter(r => {
+      if (selectedStationId !== 'all' && r.stationId !== selectedStationId) return false
+      if (selectedArea !== 'all' && selectedStationId === 'all' && !filteredStationIds.has(r.stationId)) return false
+      return true
+    })
+  }, [selectedStationId, selectedArea, filteredStationIds])
+
   const dailyTrendOption = useMemo(() => {
-    const days = []
-    const now = new Date()
+    const days: string[] = []
     for (let i = 29; i >= 0; i--) {
       const d = new Date(now)
       d.setDate(d.getDate() - i)
@@ -65,14 +75,7 @@ function TrendAnalysis({ selectedArea }: Props) {
       d.setDate(d.getDate() - i)
       const dayStr = d.toISOString().split('T')[0]
 
-      const dayRecords = mockTempRecords.filter(r => {
-        if (selectedStationId !== 'all' && r.stationId !== selectedStationId) return false
-        if (selectedArea !== 'all' && selectedStationId === 'all') {
-          const station = filteredStations.find(s => s.id === r.stationId)
-          if (!station) return false
-        }
-        return r.time.startsWith(dayStr)
-      })
+      const dayRecords = filteredRecords.filter(r => r.time.startsWith(dayStr))
 
       if (dayRecords.length > 0) {
         const temps = dayRecords.map(r => r.temperature)
@@ -87,43 +90,18 @@ function TrendAnalysis({ selectedArea }: Props) {
     }
 
     return {
-      tooltip: {
-        trigger: 'axis',
-      },
-      legend: {
-        data: ['平均温度', '最高温度', '最低温度'],
-        top: 0,
-      },
-      grid: {
-        left: '3%',
-        right: '4%',
-        bottom: '3%',
-        top: '15%',
-        containLabel: true,
-      },
-      xAxis: {
-        type: 'category',
-        boundaryGap: false,
-        data: days,
-      },
-      yAxis: {
-        type: 'value',
-        name: '温度(℃)',
-        axisLabel: {
-          formatter: '{value}℃',
-        },
-      },
+      tooltip: { trigger: 'axis' },
+      legend: { data: ['平均温度', '最高温度', '最低温度'], top: 0 },
+      grid: { left: '3%', right: '4%', bottom: '3%', top: '15%', containLabel: true },
+      xAxis: { type: 'category', boundaryGap: false, data: days },
+      yAxis: { type: 'value', name: '温度(℃)', axisLabel: { formatter: '{value}℃' } },
       series: [
         {
-          name: '平均温度',
-          type: 'line',
-          smooth: true,
-          data: avgTemps,
+          name: '平均温度', type: 'line', smooth: true, data: avgTemps,
           itemStyle: { color: '#1677ff' },
           areaStyle: {
             color: {
-              type: 'linear',
-              x: 0, y: 0, x2: 0, y2: 1,
+              type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
               colorStops: [
                 { offset: 0, color: 'rgba(22, 119, 255, 0.3)' },
                 { offset: 1, color: 'rgba(22, 119, 255, 0.05)' },
@@ -132,24 +110,15 @@ function TrendAnalysis({ selectedArea }: Props) {
           },
         },
         {
-          name: '最高温度',
-          type: 'line',
-          smooth: true,
-          data: maxTemps,
-          itemStyle: { color: '#ff4d4f' },
-          lineStyle: { type: 'dashed' },
+          name: '最高温度', type: 'line', smooth: true, data: maxTemps,
+          itemStyle: { color: '#ff4d4f' }, lineStyle: { type: 'dashed' },
         },
         {
-          name: '最低温度',
-          type: 'line',
-          smooth: true,
-          data: minTemps,
-          itemStyle: { color: '#52c41a' },
-          lineStyle: { type: 'dashed' },
+          name: '最低温度', type: 'line', smooth: true, data: minTemps,
+          itemStyle: { color: '#52c41a' }, lineStyle: { type: 'dashed' },
         },
         {
-          name: '高温预警线',
-          type: 'line',
+          name: '高温预警线', type: 'line',
           markLine: {
             silent: true,
             data: [{ yAxis: 60, label: { formatter: '60℃预警线' } }],
@@ -158,19 +127,18 @@ function TrendAnalysis({ selectedArea }: Props) {
         },
       ],
     }
-  }, [selectedStationId, selectedArea, filteredStations])
+  }, [now, filteredRecords])
 
   const modelCompareOption = useMemo(() => {
-    const modelData: Record<string, { avg: number[]; count: number; max: number; stations: Set<string> }> = {}
+    const modelData: Record<string, { avg: number[]; count: number; max: number }> = {}
 
     filteredGuns.forEach(gun => {
       if (!modelData[gun.model]) {
-        modelData[gun.model] = { avg: [], count: 0, max: 0, stations: new Set() }
+        modelData[gun.model] = { avg: [], count: 0, max: 0 }
       }
       modelData[gun.model].avg.push(gun.currentTemp)
       modelData[gun.model].count++
       modelData[gun.model].max = Math.max(modelData[gun.model].max, gun.maxTemp)
-      modelData[gun.model].stations.add(gun.stationId)
     })
 
     const models = Object.keys(modelData)
@@ -182,66 +150,22 @@ function TrendAnalysis({ selectedArea }: Props) {
     const counts = models.map(m => modelData[m].count)
 
     return {
-      tooltip: {
-        trigger: 'axis',
-        axisPointer: { type: 'shadow' },
-      },
-      legend: {
-        data: ['平均温度', '最高温度', '枪位数量'],
-        top: 0,
-      },
-      grid: {
-        left: '3%',
-        right: '4%',
-        bottom: '3%',
-        top: '15%',
-        containLabel: true,
-      },
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      legend: { data: ['平均温度', '最高温度', '枪位数量'], top: 0 },
+      grid: { left: '3%', right: '4%', bottom: '3%', top: '15%', containLabel: true },
       xAxis: {
         type: 'category',
         data: models.map(m => m.split('-')[0]),
-        axisLabel: {
-          rotate: 20,
-          fontSize: 11,
-        },
+        axisLabel: { rotate: 20, fontSize: 11 },
       },
       yAxis: [
-        {
-          type: 'value',
-          name: '温度(℃)',
-          position: 'left',
-        },
-        {
-          type: 'value',
-          name: '枪位数',
-          position: 'right',
-        },
+        { type: 'value', name: '温度(℃)', position: 'left' },
+        { type: 'value', name: '枪位数', position: 'right' },
       ],
       series: [
-        {
-          name: '平均温度',
-          type: 'bar',
-          data: avgTemps,
-          itemStyle: { color: '#1677ff' },
-          barWidth: '25%',
-          yAxisIndex: 0,
-        },
-        {
-          name: '最高温度',
-          type: 'bar',
-          data: maxTemps,
-          itemStyle: { color: '#ff4d4f' },
-          barWidth: '25%',
-          yAxisIndex: 0,
-        },
-        {
-          name: '枪位数量',
-          type: 'line',
-          data: counts,
-          smooth: true,
-          itemStyle: { color: '#faad14' },
-          yAxisIndex: 1,
-        },
+        { name: '平均温度', type: 'bar', data: avgTemps, itemStyle: { color: '#1677ff' }, barWidth: '25%', yAxisIndex: 0 },
+        { name: '最高温度', type: 'bar', data: maxTemps, itemStyle: { color: '#ff4d4f' }, barWidth: '25%', yAxisIndex: 0 },
+        { name: '枪位数量', type: 'line', data: counts, smooth: true, itemStyle: { color: '#faad14' }, yAxisIndex: 1 },
       ],
     }
   }, [filteredGuns])
@@ -249,85 +173,40 @@ function TrendAnalysis({ selectedArea }: Props) {
   const hourlyTrendOption = useMemo(() => {
     const hours = ['06:00', '08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00', '22:00']
     const tempByHour: number[][] = hours.map(() => [])
+    const powerByHour: number[][] = hours.map(() => [])
 
-    mockTempRecords.forEach(record => {
-      if (selectedStationId !== 'all' && record.stationId !== selectedStationId) return
-      if (selectedArea !== 'all' && selectedStationId === 'all') {
-        const station = filteredStations.find(s => s.id === record.stationId)
-        if (!station) return
-      }
+    filteredRecords.forEach(record => {
       const hour = new Date(record.time).getHours()
       const hourIndex = Math.floor((hour - 6) / 2)
       if (hourIndex >= 0 && hourIndex < hours.length) {
         tempByHour[hourIndex].push(record.temperature)
+        powerByHour[hourIndex].push(record.power)
       }
     })
 
     const avgTemps = tempByHour.map(temps =>
       temps.length > 0 ? Number((temps.reduce((a, b) => a + b, 0) / temps.length).toFixed(1)) : 0
     )
-
-    const powerByHour: number[][] = hours.map(() => [])
-    mockTempRecords.forEach(record => {
-      if (selectedStationId !== 'all' && record.stationId !== selectedStationId) return
-      if (selectedArea !== 'all' && selectedStationId === 'all') {
-        const station = filteredStations.find(s => s.id === record.stationId)
-        if (!station) return
-      }
-      const hour = new Date(record.time).getHours()
-      const hourIndex = Math.floor((hour - 6) / 2)
-      if (hourIndex >= 0 && hourIndex < hours.length) {
-        powerByHour[hourIndex].push(record.power)
-      }
-    })
-
     const avgPower = powerByHour.map(powers =>
       powers.length > 0 ? Math.round(powers.reduce((a, b) => a + b, 0) / powers.length) : 0
     )
 
     return {
-      tooltip: {
-        trigger: 'axis',
-        axisPointer: { type: 'cross' },
-      },
-      legend: {
-        data: ['平均温度', '平均充电功率'],
-        top: 0,
-      },
-      grid: {
-        left: '3%',
-        right: '4%',
-        bottom: '3%',
-        top: '15%',
-        containLabel: true,
-      },
-      xAxis: {
-        type: 'category',
-        data: hours,
-      },
+      tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+      legend: { data: ['平均温度', '平均充电功率'], top: 0 },
+      grid: { left: '3%', right: '4%', bottom: '3%', top: '15%', containLabel: true },
+      xAxis: { type: 'category', data: hours },
       yAxis: [
-        {
-          type: 'value',
-          name: '温度(℃)',
-          position: 'left',
-        },
-        {
-          type: 'value',
-          name: '功率(kW)',
-          position: 'right',
-        },
+        { type: 'value', name: '温度(℃)', position: 'left' },
+        { type: 'value', name: '功率(kW)', position: 'right' },
       ],
       series: [
         {
-          name: '平均温度',
-          type: 'line',
-          smooth: true,
-          data: avgTemps,
+          name: '平均温度', type: 'line', smooth: true, data: avgTemps,
           itemStyle: { color: '#ff4d4f' },
           areaStyle: {
             color: {
-              type: 'linear',
-              x: 0, y: 0, x2: 0, y2: 1,
+              type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
               colorStops: [
                 { offset: 0, color: 'rgba(255, 77, 79, 0.2)' },
                 { offset: 1, color: 'rgba(255, 77, 79, 0)' },
@@ -337,16 +216,12 @@ function TrendAnalysis({ selectedArea }: Props) {
           yAxisIndex: 0,
         },
         {
-          name: '平均充电功率',
-          type: 'line',
-          smooth: true,
-          data: avgPower,
-          itemStyle: { color: '#1677ff' },
-          yAxisIndex: 1,
+          name: '平均充电功率', type: 'line', smooth: true, data: avgPower,
+          itemStyle: { color: '#1677ff' }, yAxisIndex: 1,
         },
       ],
     }
-  }, [selectedStationId, selectedArea, filteredStations])
+  }, [filteredRecords])
 
   const weatherCompareOption = useMemo(() => {
     const weatherMap = new Map<string, { temps: number[]; count: number }>()
@@ -356,13 +231,8 @@ function TrendAnalysis({ selectedArea }: Props) {
       if (!weatherMap.has(key)) {
         weatherMap.set(key, { temps: [], count: 0 })
       }
-      const dayRecords = mockTempRecords.filter(r => r.time.startsWith(weather.date))
+      const dayRecords = filteredRecords.filter(r => r.time.startsWith(weather.date))
       dayRecords.forEach(record => {
-        if (selectedStationId !== 'all' && record.stationId !== selectedStationId) return
-        if (selectedArea !== 'all' && selectedStationId === 'all') {
-          const station = filteredStations.find(s => s.id === record.stationId)
-          if (!station) return
-        }
         weatherMap.get(key)!.temps.push(record.temperature)
       })
       weatherMap.get(key)!.count++
@@ -376,57 +246,20 @@ function TrendAnalysis({ selectedArea }: Props) {
     const days = weatherTypes.map(w => weatherMap.get(w)!.count)
 
     return {
-      tooltip: {
-        trigger: 'axis',
-        axisPointer: { type: 'shadow' },
-      },
-      legend: {
-        data: ['平均枪温', '天数'],
-        top: 0,
-      },
-      grid: {
-        left: '3%',
-        right: '4%',
-        bottom: '3%',
-        top: '15%',
-        containLabel: true,
-      },
-      xAxis: {
-        type: 'category',
-        data: weatherTypes,
-      },
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      legend: { data: ['平均枪温', '天数'], top: 0 },
+      grid: { left: '3%', right: '4%', bottom: '3%', top: '15%', containLabel: true },
+      xAxis: { type: 'category', data: weatherTypes },
       yAxis: [
-        {
-          type: 'value',
-          name: '温度(℃)',
-          position: 'left',
-        },
-        {
-          type: 'value',
-          name: '天数',
-          position: 'right',
-        },
+        { type: 'value', name: '温度(℃)', position: 'left' },
+        { type: 'value', name: '天数', position: 'right' },
       ],
       series: [
-        {
-          name: '平均枪温',
-          type: 'bar',
-          data: avgTemps,
-          itemStyle: { color: '#ff7a45' },
-          barWidth: '40%',
-          yAxisIndex: 0,
-        },
-        {
-          name: '天数',
-          type: 'line',
-          data: days,
-          smooth: true,
-          itemStyle: { color: '#13c2c2' },
-          yAxisIndex: 1,
-        },
+        { name: '平均枪温', type: 'bar', data: avgTemps, itemStyle: { color: '#ff7a45' }, barWidth: '40%', yAxisIndex: 0 },
+        { name: '天数', type: 'line', data: days, smooth: true, itemStyle: { color: '#13c2c2' }, yAxisIndex: 1 },
       ],
     }
-  }, [selectedStationId, selectedArea, filteredStations])
+  }, [filteredRecords])
 
   const topHighTempGuns = useMemo(() => {
     return [...filteredGuns]
@@ -435,15 +268,15 @@ function TrendAnalysis({ selectedArea }: Props) {
   }, [filteredGuns])
 
   const tempChange30d = useMemo(() => {
-    const firstDayRecords = mockTempRecords.filter(r => {
-      const d = new Date(now)
-      d.setDate(d.getDate() - 29)
-      return r.time.startsWith(d.toISOString().split('T')[0])
-    })
-    const lastDayRecords = mockTempRecords.filter(r => {
-      const d = new Date(now)
-      return r.time.startsWith(d.toISOString().split('T')[0])
-    })
+    const firstDayDate = new Date(now)
+    firstDayDate.setDate(firstDayDate.getDate() - 29)
+    const firstDayStr = firstDayDate.toISOString().split('T')[0]
+
+    const lastDayDate = new Date(now)
+    const lastDayStr = lastDayDate.toISOString().split('T')[0]
+
+    const firstDayRecords = filteredRecords.filter(r => r.time.startsWith(firstDayStr))
+    const lastDayRecords = filteredRecords.filter(r => r.time.startsWith(lastDayStr))
 
     const firstAvg = firstDayRecords.length > 0
       ? firstDayRecords.reduce((sum, r) => sum + r.temperature, 0) / firstDayRecords.length
@@ -452,13 +285,29 @@ function TrendAnalysis({ selectedArea }: Props) {
       ? lastDayRecords.reduce((sum, r) => sum + r.temperature, 0) / lastDayRecords.length
       : 0
 
-    return {
-      change: Number((lastAvg - firstAvg).toFixed(1)),
-      percent: firstAvg > 0 ? Number((((lastAvg - firstAvg) / firstAvg) * 100).toFixed(1)) : 0,
-    }
-  }, [])
+    const change = Number((lastAvg - firstAvg).toFixed(1))
+    const percent = firstAvg > 0 ? Number((((lastAvg - firstAvg) / firstAvg) * 100).toFixed(1)) : 0
 
-  const now = new Date()
+    return { change, percent }
+  }, [now, filteredRecords])
+
+  const currentAvgTemp = useMemo(() => {
+    if (filteredGuns.length === 0) return '0.0'
+    return (filteredGuns.reduce((sum, g) => sum + g.currentTemp, 0) / filteredGuns.length).toFixed(1)
+  }, [filteredGuns])
+
+  const highTempRatio = useMemo(() => {
+    if (filteredGuns.length === 0) return '0.0'
+    return ((filteredGuns.filter(g => g.status === 'danger').length / filteredGuns.length) * 100).toFixed(1)
+  }, [filteredGuns])
+
+  const highTempCount = useMemo(() => {
+    return filteredGuns.filter(g => g.status === 'danger').length
+  }, [filteredGuns])
+
+  const modelCount = useMemo(() => {
+    return new Set(filteredGuns.map(g => g.model)).size
+  }, [filteredGuns])
 
   return (
     <div>
@@ -507,7 +356,7 @@ function TrendAnalysis({ selectedArea }: Props) {
           <Card>
             <StatisticCard
               title="当前平均温度"
-              value={`${(filteredGuns.reduce((sum, g) => sum + g.currentTemp, 0) / filteredGuns.length).toFixed(1)}℃`}
+              value={`${currentAvgTemp}℃`}
               desc={`共${filteredGuns.length}个枪位`}
               icon={<ThermometerIcon />}
               trend="normal"
@@ -518,8 +367,8 @@ function TrendAnalysis({ selectedArea }: Props) {
           <Card>
             <StatisticCard
               title="高温枪位占比"
-              value={`${((filteredGuns.filter(g => g.status === 'danger').length / filteredGuns.length) * 100).toFixed(1)}%`}
-              desc={`${filteredGuns.filter(g => g.status === 'danger').length}个高温枪位`}
+              value={`${highTempRatio}%`}
+              desc={`${highTempCount}个高温枪位`}
               icon={<ThunderboltOutlined style={{ color: '#ff4d4f' }} />}
               trend="up"
             />
@@ -529,7 +378,7 @@ function TrendAnalysis({ selectedArea }: Props) {
           <Card>
             <StatisticCard
               title="涉及设备型号"
-              value={`${new Set(filteredGuns.map(g => g.model)).size}种`}
+              value={`${modelCount}种`}
               desc={`${filteredStations.length}个站点`}
               icon={<CloudOutlined style={{ color: '#1677ff' }} />}
               trend="normal"
@@ -569,16 +418,10 @@ function TrendAnalysis({ selectedArea }: Props) {
                     <List.Item>
                       <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
                         <span style={{
-                          width: 24,
-                          height: 24,
-                          borderRadius: '50%',
+                          width: 24, height: 24, borderRadius: '50%',
                           background: index < 3 ? '#ff4d4f' : '#d9d9d9',
-                          color: '#fff',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: 12,
-                          fontWeight: 'bold',
+                          color: '#fff', display: 'flex', alignItems: 'center',
+                          justifyContent: 'center', fontSize: 12, fontWeight: 'bold',
                           marginRight: 12,
                         }}>
                           {index + 1}
