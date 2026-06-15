@@ -1,5 +1,5 @@
-import { useState, useMemo } from 'react'
-import { Row, Col, Card, Select, DatePicker, Tabs, Tag, List, Progress } from 'antd'
+import { useState, useMemo, useEffect } from 'react'
+import { Row, Col, Card, Select, DatePicker, Tabs, Tag, List, Progress, Modal, Descriptions, Button } from 'antd'
 import {
   LineChartOutlined,
   ThunderboltOutlined,
@@ -7,10 +7,15 @@ import {
   ClockCircleOutlined,
   RiseOutlined,
   FallOutlined,
+  WarningOutlined,
+  ToolOutlined,
+  AlertOutlined,
+  CheckCircleOutlined,
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
 import { mockStations, mockGuns, mockTempRecords, mockWeatherData } from '../mock'
+import type { Gun } from '../types'
 
 const { RangePicker } = DatePicker
 
@@ -18,9 +23,28 @@ interface Props {
   selectedArea: string
 }
 
+interface AbnormalGun {
+  gun: Gun
+  tempRiseRate: number
+  consecutiveWarningDays: number
+  maxTemp: number
+  avgTemp: number
+  suggestion: string
+}
+
 function TrendAnalysis({ selectedArea }: Props) {
   const [selectedStationId, setSelectedStationId] = useState<string>('all')
   const [selectedGunModel, setSelectedGunModel] = useState<string>('all')
+  const [abnormalDetailVisible, setAbnormalDetailVisible] = useState(false)
+  const [selectedAbnormalGun, setSelectedAbnormalGun] = useState<AbnormalGun | null>(null)
+
+  useEffect(() => {
+    if (selectedArea === 'all') return
+    const station = mockStations.find(s => s.id === selectedStationId)
+    if (!station || station.area !== selectedArea) {
+      setSelectedStationId('all')
+    }
+  }, [selectedArea, selectedStationId])
 
   const filteredStations = useMemo(() => {
     if (selectedArea === 'all') return mockStations
@@ -57,6 +81,93 @@ function TrendAnalysis({ selectedArea }: Props) {
       return true
     })
   }, [selectedStationId, selectedArea, filteredStationIds])
+
+  const abnormalGuns = useMemo<AbnormalGun[]>(() => {
+    const gunMap = new Map<string, { gun: Gun; records: typeof mockTempRecords }>()
+
+    filteredGuns.forEach(gun => {
+      gunMap.set(gun.id, { gun, records: [] })
+    })
+
+    filteredRecords.forEach(record => {
+      const entry = gunMap.get(record.gunId)
+      if (entry) {
+        entry.records.push(record)
+      }
+    })
+
+    const results: AbnormalGun[] = []
+
+    gunMap.forEach(({ gun, records }) => {
+      if (records.length < 5) return
+
+      const sortedRecords = [...records].sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
+
+      const daysMap = new Map<string, number[]>()
+      records.forEach(r => {
+        const day = r.time.split('T')[0]
+        if (!daysMap.has(day)) {
+          daysMap.set(day, [])
+        }
+        daysMap.get(day)!.push(r.temperature)
+      })
+
+      const days = Array.from(daysMap.keys()).sort()
+      const dayAvgs = days.map(day => {
+        const temps = daysMap.get(day)!
+        return {
+          day,
+          avg: temps.reduce((a, b) => a + b, 0) / temps.length,
+          max: Math.max(...temps),
+        }
+      })
+
+      let consecutiveWarningDays = 0
+      let currentStreak = 0
+      dayAvgs.forEach(d => {
+        if (d.max > 60) {
+          currentStreak++
+          consecutiveWarningDays = Math.max(consecutiveWarningDays, currentStreak)
+        } else {
+          currentStreak = 0
+        }
+      })
+
+      const first7Avg = dayAvgs.slice(0, 7).reduce((sum, d) => sum + d.avg, 0) / Math.min(7, dayAvgs.length)
+      const last7Avg = dayAvgs.slice(-7).reduce((sum, d) => sum + d.avg, 0) / Math.min(7, dayAvgs.length)
+      const tempRiseRate = Number((last7Avg - first7Avg).toFixed(1))
+
+      const allTemps = records.map(r => r.temperature)
+      const maxTemp = Math.max(...allTemps)
+      const avgTemp = allTemps.reduce((a, b) => a + b, 0) / allTemps.length
+
+      if (tempRiseRate > 3 || consecutiveWarningDays >= 2 || maxTemp > 70) {
+        let suggestion = ''
+        if (maxTemp > 75) {
+          suggestion = '紧急：建议立即停机检查，更换散热模块和枪线连接器'
+        } else if (consecutiveWarningDays >= 3) {
+          suggestion = '高频：建议3天内安排现场巡检，清洁散热系统，检查风扇运转'
+        } else if (tempRiseRate > 5) {
+          suggestion = '升温快：建议检查负载情况，优化散热条件，增加散热风扇'
+        } else if (avgTemp > 55) {
+          suggestion = '偏高：建议列入下周巡检计划，重点关注温升趋势'
+        } else {
+          suggestion = '关注：建议增加远程监控频次，持续观察温度变化'
+        }
+
+        results.push({
+          gun,
+          tempRiseRate: Number(tempRiseRate),
+          consecutiveWarningDays,
+          maxTemp,
+          avgTemp: Number(avgTemp.toFixed(1)),
+          suggestion,
+        })
+      }
+    })
+
+    return results.sort((a, b) => b.tempRiseRate - a.tempRiseRate)
+  }, [filteredGuns, filteredRecords])
 
   const dailyTrendOption = useMemo(() => {
     const days: string[] = []
@@ -309,6 +420,61 @@ function TrendAnalysis({ selectedArea }: Props) {
     return new Set(filteredGuns.map(g => g.model)).size
   }, [filteredGuns])
 
+  const getGunTrendOption = (gunId: string) => {
+    const gunRecords = filteredRecords.filter(r => r.gunId === gunId)
+
+    const daysMap = new Map<string, { avg: number; max: number; count: number }>()
+
+    gunRecords.forEach(r => {
+      const day = r.time.split('T')[0]
+      if (!daysMap.has(day)) {
+        daysMap.set(day, { avg: r.temperature, max: r.temperature, count: 1 })
+      } else {
+        const existing = daysMap.get(day)!
+        existing.avg += r.temperature
+        existing.max = Math.max(existing.max, r.temperature)
+        existing.count += 1
+      }
+    })
+
+    const days: string[] = []
+    const avgTemps: number[] = []
+    const maxTemps: number[] = []
+
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date(now)
+      d.setDate(d.getDate() - i)
+      const dayStr = d.toISOString().split('T')[0]
+      const data = daysMap.get(dayStr)
+      days.push(dayjs(d).format('MM-DD'))
+      if (data && data.count) {
+        avgTemps.push(Number((data.avg / data.count).toFixed(1)))
+        maxTemps.push(Number(data.max.toFixed(1)))
+      } else {
+        avgTemps.push(0)
+        maxTemps.push(0)
+      }
+    }
+
+    return {
+      tooltip: { trigger: 'axis' },
+      legend: { data: ['日均温', '日最高温'], top: 0 },
+      grid: { left: '3%', right: '4%', bottom: '3%', top: '12%', containLabel: true },
+      xAxis: { type: 'category', boundaryGap: false, data: days },
+      yAxis: { type: 'value', name: '温度(℃)' },
+      series: [
+        {
+          name: '日均温', type: 'line', smooth: true, data: avgTemps,
+          itemStyle: { color: '#1677ff' }, areaStyle: { color: 'rgba(22, 119, 255, 0.15)' },
+        },
+        {
+          name: '日最高温', type: 'line', smooth: true, data: maxTemps,
+          itemStyle: { color: '#ff4d4f' },
+        },
+      ],
+    }
+  }
+
   return (
     <div>
       <Card style={{ marginBottom: 16 }}>
@@ -392,63 +558,139 @@ function TrendAnalysis({ selectedArea }: Props) {
           <Row gutter={16}>
             <Col span={16}>
               <Card
-                title={
-                  <div className="card-section-title">
-                    <LineChartOutlined style={{ color: '#1677ff' }} />
-                    30天温度变化趋势
-                  </div>
-                }
-              >
-                <ReactECharts option={dailyTrendOption} style={{ height: 350 }} />
-              </Card>
+              title={
+                <div className="card-section-title">
+                  <LineChartOutlined style={{ color: '#1677ff' }} />
+                  30天温度变化趋势
+                </div>
+              }
+            >
+              <ReactECharts option={dailyTrendOption} style={{ height: 350 }} />
+            </Card>
             </Col>
             <Col span={8}>
               <Card
-                title={
-                  <div className="card-section-title">
-                    <ThunderboltOutlined style={{ color: '#ff4d4f' }} />
-                    高温枪位TOP10
-                  </div>
-                }
-              >
-                <List
-                  size="small"
-                  dataSource={topHighTempGuns}
-                  renderItem={(gun, index) => (
-                    <List.Item>
-                      <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-                        <span style={{
-                          width: 24, height: 24, borderRadius: '50%',
-                          background: index < 3 ? '#ff4d4f' : '#d9d9d9',
-                          color: '#fff', display: 'flex', alignItems: 'center',
-                          justifyContent: 'center', fontSize: 12, fontWeight: 'bold',
-                          marginRight: 12,
+              title={
+                <div className="card-section-title">
+                  <ThunderboltOutlined style={{ color: '#ff4d4f' }} />
+                  高温枪位TOP10
+                </div>
+              }
+            >
+              <List
+                size="small"
+                dataSource={topHighTempGuns}
+                renderItem={(gun, index) => (
+                  <List.Item>
+                    <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+                      <span style={{
+                        width: 24, height: 24, borderRadius: '50%',
+                        background: index < 3 ? '#ff4d4f' : '#d9d9d9',
+                        color: '#fff', display: 'flex', alignItems: 'center',
+                        justifyContent: 'center', fontSize: 12, fontWeight: 'bold',
+                        marginRight: 12,
+                      }}>
+                        {index + 1}
+                      </span>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, fontWeight: 500 }}>
+                          {gun.stationName} - {gun.gunNo}
+                        </div>
+                        <div style={{ fontSize: 11, color: '#999' }}>{gun.model}</div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontSize: 16, fontWeight: 'bold', color: '#ff4d4f' }}>
+                          {gun.currentTemp.toFixed(1)}℃
+                        </div>
+                        <Progress
+                          percent={Math.round((gun.currentTemp / 90) * 100)}
+                          size="small"
+                          showInfo={false}
+                          strokeColor="#ff4d4f"
+                          style={{ width: 60 }}
+                        />
+                      </div>
+                    </div>
+                  </List.Item>
+                )}
+              />
+            </Card>
+            </Col>
+          </Row>
+        </Tabs.TabPane>
+
+        <Tabs.TabPane tab={<span><AlertOutlined style={{ marginRight: 6 }} />异常升温识别</span>} key="4">
+          <Row gutter={16}>
+            <Col span={24}>
+              <Card
+              title={
+                <div className="card-section-title">
+                  <WarningOutlined style={{ color: '#ff4d4f' }} />
+                  异常升温枪位列表
+                </div>
+              }
+              extra={<Tag color="red">共识别出 {abnormalGuns.length} 个需关注</Tag>}
+            >
+              {abnormalGuns.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '48px 0', color: '#52c41a' }}>
+                <CheckCircleOutlined style={{ fontSize: 48, marginBottom: 16 }} />
+                <div style={{ fontSize: 16 }}>当前筛选范围内无异常升温枪位</div>
+              </div>
+            ) : (
+              <List
+                dataSource={abnormalGuns}
+                renderItem={(item, index) => (
+                  <List.Item
+                    actions={[
+                      <Button type="link" onClick={() => {
+                      setSelectedAbnormalGun(item);
+                      setAbnormalDetailVisible(true);
+                    }}>查看详情</Button>,
+                    ]}
+                  >
+                    <List.Item.Meta
+                      avatar={
+                        <div style={{
+                          width: 44, height: 44, borderRadius: 8,
+                          background: item.maxTemp > 75 ? '#ff4d4f' : '#faad14',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          color: '#fff', fontSize: 20,
                         }}>
                           {index + 1}
-                        </span>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: 13, fontWeight: 500 }}>
-                            {gun.stationName} - {gun.gunNo}
-                          </div>
-                          <div style={{ fontSize: 11, color: '#999' }}>{gun.model}</div>
                         </div>
-                        <div style={{ textAlign: 'right' }}>
-                          <div style={{ fontSize: 16, fontWeight: 'bold', color: '#ff4d4f' }}>
-                            {gun.currentTemp.toFixed(1)}℃
-                          </div>
-                          <Progress
-                            percent={Math.round((gun.currentTemp / 90) * 100)}
-                            size="small"
-                            showInfo={false}
-                            strokeColor="#ff4d4f"
-                            style={{ width: 60 }}
-                          />
+                      }
+                      title={
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontWeight: 500 }}>{item.gun.stationName} - {item.gun.gunNo}</span>
+                          <Tag color="blue">{item.gun.model.split('-')[0]}</Tag>
+                          {item.consecutiveWarningDays >= 3 && <Tag color="red">连续{''}
+{item.consecutiveWarningDays}天超预警</Tag>}
+                          {item.tempRiseRate > 5 && <Tag color="orange">升温快</Tag>}
                         </div>
-                      </div>
-                    </List.Item>
-                  )}
-                />
-              </Card>
+                      }
+                      description={
+                        <div style={{ display: 'flex', gap: 24, marginTop: 6, color: '#666', fontSize: 13 }}>
+                          <span>最高温度：<strong style={{ color: '#ff4d4f' }}>{item.maxTemp.toFixed(1)}℃</strong></span>
+                          <span>30天升温：<strong style={{ color: item.tempRiseRate > 0 ? '#ff4d4f' : '#52c41a' }}>
+                            {item.tempRiseRate > 0 ? '+' : ''}{item.tempRiseRate}℃
+                          </strong></span>
+                          <span>连续超预警：<strong>{item.consecutiveWarningDays}天</strong></span>
+                          <span>平均温度：{item.avgTemp}℃</span>
+                        </div>
+                      }
+                    />
+                    <div style={{ maxWidth: 420, padding: 8, background: item.maxTemp > 75 ? '#fff1f0' : '#fffbe6', borderRadius: 6 }}>
+                      <ToolOutlined style={{ marginRight: 6 }} />
+                      <span style={{ fontSize: 12, color: item.maxTemp > 75 ? '#ff4d4f' : '#faad14' }}>
+                        {item.suggestion}
+                      </span>
+                    </div>
+                  </List.Item>
+                )}
+                pagination={{ pageSize: 6 }}
+              />
+            )}
+            </Card>
             </Col>
           </Row>
         </Tabs.TabPane>
@@ -457,32 +699,32 @@ function TrendAnalysis({ selectedArea }: Props) {
           <Row gutter={16}>
             <Col span={24}>
               <Card
-                title={
-                  <div className="card-section-title">
-                    <ThunderboltOutlined style={{ color: '#1677ff' }} />
-                    不同型号设备温升表现对比
-                  </div>
-                }
-                extra={<Tag color="blue">按同型号设备跨站点对比</Tag>}
-              >
-                <ReactECharts option={modelCompareOption} style={{ height: 400 }} />
-              </Card>
+              title={
+                <div className="card-section-title">
+                  <ThunderboltOutlined style={{ color: '#1677ff' }} />
+                  不同型号设备温升表现对比
+                </div>
+              }
+              extra={<Tag color="blue">按同型号设备跨站点对比</Tag>}
+            >
+              <ReactECharts option={modelCompareOption} style={{ height: 400 }} />
+            </Card>
             </Col>
           </Row>
 
           <Row gutter={16} style={{ marginTop: 16 }}>
             <Col span={24}>
               <Card
-                title={
-                  <div className="card-section-title">
-                    <ClockCircleOutlined style={{ color: '#1677ff' }} />
-                    各时段温升与充电功率关联
-                  </div>
-                }
-                extra={<Tag color="orange">高峰时段分析</Tag>}
-              >
-                <ReactECharts option={hourlyTrendOption} style={{ height: 350 }} />
-              </Card>
+              title={
+                <div className="card-section-title">
+                  <ClockCircleOutlined style={{ color: '#1677ff' }} />
+                  各时段温升与充电功率关联
+                </div>
+              }
+              extra={<Tag color="orange">高峰时段分析</Tag>}
+            >
+              <ReactECharts option={hourlyTrendOption} style={{ height: 350 }} />
+            </Card>
             </Col>
           </Row>
         </Tabs.TabPane>
@@ -491,49 +733,93 @@ function TrendAnalysis({ selectedArea }: Props) {
           <Row gutter={16}>
             <Col span={14}>
               <Card
-                title={
-                  <div className="card-section-title">
-                    <CloudOutlined style={{ color: '#13c2c2' }} />
-                    天气类型与枪温关系
-                  </div>
-                }
-              >
-                <ReactECharts option={weatherCompareOption} style={{ height: 350 }} />
-              </Card>
+              title={
+                <div className="card-section-title">
+                  <CloudOutlined style={{ color: '#13c2c2' }} />
+                  天气类型与枪温关系
+                </div>
+              }
+            >
+              <ReactECharts option={weatherCompareOption} style={{ height: 350 }} />
+            </Card>
             </Col>
             <Col span={10}>
               <Card
-                title={
-                  <div className="card-section-title">
-                    <CloudOutlined style={{ color: '#faad14' }} />
-                    30天天气概况
-                  </div>
-                }
-              >
-                <List
-                  size="small"
-                  dataSource={mockWeatherData.slice(-14).reverse()}
-                  renderItem={weather => (
-                    <List.Item>
-                      <span style={{ width: 100 }}>{weather.date}</span>
-                      <Tag color={
-                        weather.weather === '晴' ? 'gold' :
-                        weather.weather === '多云' ? 'blue' :
-                        weather.weather === '阴' ? 'default' :
-                        'cyan'
-                      }>
-                        {weather.weather}
-                      </Tag>
-                      <span style={{ marginLeft: 12 }}>{weather.temperature}℃</span>
-                      <span style={{ color: '#999', marginLeft: 12 }}>湿度 {weather.humidity}%</span>
-                    </List.Item>
-                  )}
-                />
-              </Card>
+              title={
+                <div className="card-section-title">
+                  <CloudOutlined style={{ color: '#faad14' }} />
+                  30天天气概况
+                </div>
+              }
+            >
+              <List
+                size="small"
+                dataSource={mockWeatherData.slice(-14).reverse()}
+                renderItem={weather => (
+                  <List.Item>
+                    <span style={{ width: 100 }}>{weather.date}</span>
+                    <Tag color={
+                      weather.weather === '晴' ? 'gold' :
+                      weather.weather === '多云' ? 'blue' :
+                      weather.weather === '阴' ? 'default' :
+                      'cyan'
+                    }>
+                      {weather.weather}
+                    </Tag>
+                    <span style={{ marginLeft: 12 }}>{weather.temperature}℃</span>
+                    <span style={{ color: '#999', marginLeft: 12 }}>湿度 {weather.humidity}%</span>
+                  </List.Item>
+                )}
+              />
+            </Card>
             </Col>
           </Row>
         </Tabs.TabPane>
       </Tabs>
+
+      <Modal
+        title="异常枪位详情"
+        open={abnormalDetailVisible}
+        onCancel={() => setAbnormalDetailVisible(false)}
+        footer={[
+          <Button key="close" onClick={() => setAbnormalDetailVisible(false)}>关闭</Button>,
+        ]}
+        width={800}
+      >
+        {selectedAbnormalGun && (
+          <div>
+            <Descriptions bordered column={2} size="small" style={{ marginBottom: 16 }}>
+              <Descriptions.Item label="站点名称">{selectedAbnormalGun.gun.stationName}</Descriptions.Item>
+              <Descriptions.Item label="枪位编号">{selectedAbnormalGun.gun.gunNo}</Descriptions.Item>
+              <Descriptions.Item label="设备型号">{selectedAbnormalGun.gun.model}</Descriptions.Item>
+              <Descriptions.Item label="功率">{selectedAbnormalGun.gun.power}kW</Descriptions.Item>
+              <Descriptions.Item label="最高温度">
+                <span style={{ color: '#ff4d4f', fontWeight: 'bold' }}>{selectedAbnormalGun.maxTemp.toFixed(1)}℃</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="平均温度">{selectedAbnormalGun.avgTemp}℃</Descriptions.Item>
+              <Descriptions.Item label="30天升温">
+                <span style={{ color: selectedAbnormalGun.tempRiseRate > 0 ? '#ff4d4f' : '#52c41a', fontWeight: 'bold' }}>
+                  {selectedAbnormalGun.tempRiseRate > 0 ? '+' : ''}{selectedAbnormalGun.tempRiseRate}℃
+                </span>
+              </Descriptions.Item>
+              <Descriptions.Item label="连续超预警">{selectedAbnormalGun.consecutiveWarningDays}天</Descriptions.Item>
+            </Descriptions>
+
+            <Card title="最近30天温度走势" size="small" style={{ marginBottom: 16 }}>
+              <ReactECharts option={getGunTrendOption(selectedAbnormalGun.gun.id)} style={{ height: 220 }} />
+            </Card>
+
+            <Card title="建议处理动作" size="small">
+              <div style={{ padding: '12px 16px', background: selectedAbnormalGun.maxTemp > 75 ? '#fff1f0' : '#fffbe6', borderRadius: 6 }}>
+                <ToolOutlined style={{ marginRight: 8, color: selectedAbnormalGun.maxTemp > 75 ? '#ff4d4f' : '#faad14' }} />
+                <span style={{ color: selectedAbnormalGun.maxTemp > 75 ? '#ff4d4f' : '#faad14', fontWeight: 500 }}>
+                  {selectedAbnormalGun.suggestion}
+                </span>
+              </div>
+            </Card>
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }

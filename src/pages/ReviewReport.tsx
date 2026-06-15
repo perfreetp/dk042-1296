@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
 import {
   Row, Col, Card, Button, Tabs, List, Tag, Progress, Modal, Form,
   Input, Select, DatePicker, message, Divider, Space, Descriptions,
@@ -41,13 +41,34 @@ interface Props {
   selectedArea: string
 }
 
+const STORAGE_KEY = 'review_history_reports'
+
 function ReviewReport({ selectedArea }: Props) {
   const [selectedRectification, setSelectedRectification] = useState<Rectification | null>(null)
   const [detailVisible, setDetailVisible] = useState(false)
   const [generateModalVisible, setGenerateModalVisible] = useState(false)
   const [historyModalVisible, setHistoryModalVisible] = useState(false)
   const [historyReports, setHistoryReports] = useState<HistoryReport[]>([])
+  const [historyFilterArea, setHistoryFilterArea] = useState<string>('all')
+  const [historyFilterFormat, setHistoryFilterFormat] = useState<string>('all')
+  const [historyFilterTime, setHistoryFilterTime] = useState<string>('all')
   const [form] = Form.useForm()
+
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (saved) {
+      try {
+        setHistoryReports(JSON.parse(saved))
+      } catch (e) {
+        console.error('Failed to load history reports')
+      }
+    }
+  }, [])
+
+  const saveHistoryReports = (reports: HistoryReport[]) => {
+    setHistoryReports(reports)
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(reports))
+  }
 
   const filteredRectifications = useMemo(() => {
     if (selectedArea === 'all') return mockRectifications
@@ -118,6 +139,35 @@ function ReviewReport({ selectedArea }: Props) {
   const dangerGuns = useMemo(() => {
     return areaGuns.filter(g => g.status === 'danger')
   }, [areaGuns])
+
+  const areaOptions = useMemo(() => {
+    const areas = ['all', ...new Set(mockStations.map(s => s.area))]
+    return areas.map(a => ({
+      value: a,
+      label: a === 'all' ? '全部区域' : a,
+    }))
+  }, [])
+
+  const filteredHistoryReports = useMemo(() => {
+    let filtered = [...historyReports]
+    if (historyFilterArea !== 'all') {
+      filtered = filtered.filter(r => r.area === historyFilterArea)
+    }
+    if (historyFilterFormat !== 'all') {
+      filtered = filtered.filter(r => r.format === historyFilterFormat)
+    }
+    if (historyFilterTime !== 'all') {
+      const now = new Date()
+      if (historyFilterTime === '7d') {
+        const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+        filtered = filtered.filter(r => new Date(r.createTime) >= sevenDaysAgo)
+      } else if (historyFilterTime === '30d') {
+        const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+        filtered = filtered.filter(r => new Date(r.createTime) >= thirtyDaysAgo)
+      }
+    }
+    return filtered
+  }, [historyReports, historyFilterArea, historyFilterFormat, historyFilterTime])
 
   const buildReportHtml = useCallback((title: string, dateRange: string, sections: string[]) => {
     const now = dayjs().format('YYYY-MM-DD HH:mm:ss')
@@ -245,7 +295,7 @@ function ReviewReport({ selectedArea }: Props) {
         createTime: dayjs().format('YYYY-MM-DD HH:mm:ss'),
         dateRange,
       }
-      setHistoryReports(prev => [newReport, ...prev])
+      saveHistoryReports([newReport, ...historyReports])
       setGenerateModalVisible(false)
     })
   }
@@ -259,7 +309,7 @@ function ReviewReport({ selectedArea }: Props) {
   }
 
   const handleDeleteHistoryReport = (id: string) => {
-    setHistoryReports(prev => prev.filter(r => r.id !== id))
+    saveHistoryReports(historyReports.filter(r => r.id !== id))
     message.success('已删除该历史报告')
   }
 
@@ -684,7 +734,7 @@ function ReviewReport({ selectedArea }: Props) {
         open={historyModalVisible}
         onCancel={() => setHistoryModalVisible(false)}
         footer={null}
-        width={700}
+        width={800}
       >
         {historyReports.length === 0 ? (
           <Empty
@@ -697,56 +747,119 @@ function ReviewReport({ selectedArea }: Props) {
             </Button>
           </Empty>
         ) : (
-          <List
-            dataSource={historyReports}
-            renderItem={report => (
-              <List.Item
-                actions={[
-                  <Button
-                    type="link"
-                    icon={<DownloadOutlined />}
-                    onClick={() => handleExportHistoryReport(report)}
+          <div>
+            <Card size="small" style={{ marginBottom: 16 }}>
+              <Row gutter={12} align="middle">
+                <Col span={8}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ color: '#666', fontSize: 13 }}>区域：</span>
+                    <Select
+                      value={historyFilterArea}
+                      onChange={setHistoryFilterArea}
+                      options={areaOptions}
+                      style={{ flex: 1 }}
+                      size="small"
+                    />
+                  </div>
+                </Col>
+                <Col span={8}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ color: '#666', fontSize: 13 }}>格式：</span>
+                    <Select
+                      value={historyFilterFormat}
+                      onChange={setHistoryFilterFormat}
+                      options={[
+                        { value: 'all', label: '全部格式' },
+                        { value: 'HTML/PDF', label: 'HTML/PDF' },
+                        { value: 'HTML/Word', label: 'HTML/Word' },
+                        { value: 'Excel', label: 'Excel' },
+                      ]}
+                      style={{ flex: 1 }}
+                      size="small"
+                    />
+                  </div>
+                </Col>
+                <Col span={8}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ color: '#666', fontSize: 13 }}>时间：</span>
+                    <Select
+                      value={historyFilterTime}
+                      onChange={setHistoryFilterTime}
+                      options={[
+                        { value: 'all', label: '全部时间' },
+                        { value: '7d', label: '最近7天' },
+                        { value: '30d', label: '最近30天' },
+                      ]}
+                      style={{ flex: 1 }}
+                      size="small"
+                    />
+                  </div>
+                </Col>
+              </Row>
+              <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>
+                共找到 {filteredHistoryReports.length} 份报告
+              </div>
+            </Card>
+            {filteredHistoryReports.length === 0 ? (
+              <Empty
+                description="没有符合筛选条件的报告"
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                style={{ padding: '32px 0' }}
+              />
+            ) : (
+              <List
+                dataSource={filteredHistoryReports}
+                renderItem={report => (
+                  <List.Item
+                    actions={[
+                      <Button
+                        type="link"
+                        icon={<DownloadOutlined />}
+                        onClick={() => handleExportHistoryReport(report)}
+                      >
+                        导出
+                      </Button>,
+                      <Button
+                        type="link"
+                        danger
+                        icon={<DeleteOutlined />}
+                        onClick={() => handleDeleteHistoryReport(report.id)}
+                      >
+                        删除
+                      </Button>,
+                    ]}
                   >
-                    导出
-                  </Button>,
-                  <Button
-                    type="link"
-                    danger
-                    icon={<DeleteOutlined />}
-                    onClick={() => handleDeleteHistoryReport(report.id)}
-                  >
-                    删除
-                  </Button>,
-                ]}
-              >
-                <List.Item.Meta
-                  avatar={
-                    <div style={{
-                      width: 44, height: 44, borderRadius: 8,
-                      background: '#e6f7ff',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    }}>
-                      <FileTextOutlined style={{ color: '#1677ff', fontSize: 22 }} />
-                    </div>
-                  }
-                  title={
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span>{report.title}</span>
-                      <Tag color="blue">{report.type}</Tag>
-                      <Tag>{report.format}</Tag>
-                    </div>
-                  }
-                  description={
-                    <div style={{ display: 'flex', gap: 16, marginTop: 4, color: '#999', fontSize: 13 }}>
-                      <span><CalendarOutlined style={{ marginRight: 4 }} />{report.createTime}</span>
-                      <span>区域：{report.area}</span>
-                      <span>周期：{report.dateRange}</span>
-                    </div>
-                  }
-                />
-              </List.Item>
+                    <List.Item.Meta
+                      avatar={
+                        <div style={{
+                          width: 44, height: 44, borderRadius: 8,
+                          background: '#e6f7ff',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        }}>
+                          <FileTextOutlined style={{ color: '#1677ff', fontSize: 22 }} />
+                        </div>
+                      }
+                      title={
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span>{report.title}</span>
+                          <Tag color="blue">{report.type}</Tag>
+                          <Tag>{report.format}</Tag>
+                        </div>
+                      }
+                      description={
+                        <div style={{ display: 'flex', gap: 16, marginTop: 4, color: '#999', fontSize: 13 }}>
+                          <span><CalendarOutlined style={{ marginRight: 4 }} />{report.createTime}</span>
+                          <span>区域：{report.area}</span>
+                          <span>周期：{report.dateRange}</span>
+                        </div>
+                      }
+                    />
+                  </List.Item>
+                )}
+                pagination={{ pageSize: 5 }}
+              />
             )}
-          />
+          </div>
         )}
       </Modal>
     </div>
